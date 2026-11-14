@@ -48,15 +48,10 @@ namespace SP2TextureMod
         private static AircraftScript _activeAircraft;
         private static int _verifyFrame = -1;
 
-        private static PaintStyle Style
-        {
-            get
-            {
-                return Plugin.SupersampledStyle.Value
-                    ? PaintStyle.AlbedoTextureSupersampledWithMipmapBias
-                    : PaintStyle.AlbedoTexture;
-            }
-        }
+        // The style in use. The first press uses the one the game itself uses for gauge faces
+        // (supersampled, style 4); the second press tries the plain one (style 3); the third reverts.
+        private static PaintStyle _style = PaintStyle.AlbedoTextureSupersampledWithMipmapBias;
+        private static int _cycle;
 
         // ------------------------------------------------------------------ entry points
 
@@ -91,13 +86,26 @@ namespace SP2TextureMod
             }
 
             Prune();
-            if (Parts.Count > 0)
+            if (Parts.Count == 0)
+            {
+                _cycle = 0;
+            }
+
+            if (_cycle == 0)
+            {
+                ApplyAll(aircraft, context, PaintStyle.AlbedoTextureSupersampledWithMipmapBias);
+                _cycle = Parts.Count > 0 ? 1 : 0;
+            }
+            else if (_cycle == 1)
             {
                 RevertAll();
+                ApplyAll(aircraft, context, PaintStyle.AlbedoTexture);
+                _cycle = Parts.Count > 0 ? 2 : 0;
             }
             else
             {
-                ApplyAll(aircraft, context);
+                RevertAll();
+                _cycle = 0;
             }
         }
 
@@ -148,9 +156,10 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ apply
 
-        private static void ApplyAll(AircraftScript aircraft, string context)
+        private static void ApplyAll(AircraftScript aircraft, string context, PaintStyle style)
         {
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            _style = style;
 
             ThemeScript theme = aircraft.Theme;
             if (theme == null || theme.Theme == null || theme.Material == null)
@@ -231,9 +240,9 @@ namespace SP2TextureMod
             try { albedoIndex = AlbedoShaderIndex(theme); } catch (Exception) { }
 
             Plugin.Log.LogInfo(Tag + "applied to " + renderers + " renderer(s) of " + parts + " part(s) in " + watch.ElapsedMilliseconds
-                + " ms | style=" + Style + " shaderIndex=" + albedoIndex + " tilesPerMeter=" + Plugin.TestTilesPerMeter.Value
+                + " ms | style=" + _style + " shaderIndex=" + albedoIndex + " tilesPerMeter=" + Plugin.TestTilesPerMeter.Value
                 + " | skipped " + skipped + (skippedText.Length > 0 ? " (" + skippedText + ")" : ""));
-            Plugin.Log.LogInfo(Tag + "press the key again to revert. The craft file is not modified.");
+            Plugin.Log.LogInfo(Tag + "press the key again: 1st press = supersampled style, 2nd = plain style, 3rd = revert. The craft file is not modified.");
             _verifyFrame = Time.frameCount + 5;
         }
 
@@ -261,11 +270,12 @@ namespace SP2TextureMod
 
             int index = AlbedoShaderIndex(theme);
             Vector4[] data = atlas.GetVectorArray("_MaterialData");
-            if (data != null && data.Length > index * 10 + 2)
+            if (data != null && data.Length > index * 10 + 3)
             {
-                Plugin.Log.LogInfo(Tag + "verify: _MaterialData length=" + data.Length + " albedo entry (index " + index + "): header="
-                    + data[index * 10] + " color=" + data[index * 10 + 1] + " metallic/smoothness/emission=" + data[index * 10 + 2]
-                    + " (header.x is the paint style; the Albedo style must be 3, supersampled 4)");
+                Plugin.Log.LogInfo(Tag + "verify: _MaterialData length=" + data.Length + " entry for " + _style + " (index " + index + "): header="
+                    + data[index * 10] + " wrap=" + data[index * 10 + 1] + " color=" + data[index * 10 + 2]
+                    + " props(metallic,smoothness,emissionDay,emissionNight)=" + data[index * 10 + 3]
+                    + " (header.x is the paint style: plain Albedo 3, supersampled 4)");
             }
             else
             {
@@ -440,7 +450,7 @@ namespace SP2TextureMod
 
             material.name = "SP2TextureMod Atlas";
             material.SetTexture(BaseMapId, _texture);
-            if (Plugin.SupersampledStyle.Value)
+            if (_style == PaintStyle.AlbedoTextureSupersampledWithMipmapBias)
             {
                 material.SetFloat(SupersampleBiasId, -1f);
             }
@@ -451,7 +461,7 @@ namespace SP2TextureMod
 
         private static int AlbedoShaderIndex(ThemeScript theme)
         {
-            PartMaterial reserved = theme.Theme.GetReservedMaterial(Style);
+            PartMaterial reserved = theme.Theme.GetReservedMaterial(_style);
             return theme.Theme.GetMaterialIndex(reserved.Id);
         }
 

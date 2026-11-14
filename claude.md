@@ -38,13 +38,20 @@ Game 0.1.100, Unity 6000.3.20, BepInEx 5.4.23.5. User's test craft: 93 parts, 14
 - `Wing`, `Flap`, `Window` and `Propeller Assembly` have `combine=False` (never merged in flight); `Fuselage` has `combine=True`. 22 renderers already `excludeCombine=True` (flaps, wheels).
 - Another BepInEx plugin was loaded: "SP2 Reference Model 0.7.0" (injects controls into the designer main menu). Ask the user whether it is theirs: it may already hold the reference model transform that Phase 3 needs.
 
+## Phase 2 first run (verified in the game, user's log and screenshots)
+
+Mechanics all worked, no exceptions: 144-281 procedural renderers per craft were switched in 10-70 ms, every submesh used the atlas material, `_BaseMap` was the checker (512x512), UV0 was filled (box projection) and UV1.x = 24 everywhere, `_MaterialData[24]` had header.x = 3 (plain Albedo style) with white color, revert restored the craft exactly, decals stayed visible on top. **But the plane rendered plain white with correct shading: the shader did not draw the texture in the plain `AlbedoTexture` style (3).**
+Hypothesis: style 3 is a reserved placeholder the shader does not implement; the only style the game itself uses with a texture is style 4 (`AlbedoTextureSupersampledWithMipmapBias`, gauge faces). The next build cycles F10: 1st press style 4 (+ `_SupersampleMipmapBias` = -1), 2nd press style 3, 3rd press revert, to settle it in one session.
+Layout of `_MaterialData` per material (10 Vector4): [0] header (style, textureIndex, blend z, normalization flags), [1] wrap modes (+ color-count flag in w), [2] color 0 (linear), [3] metallic/smoothness/emissionDay/emissionNight of color 0, then the same pair for colors 1-3.
+Also seen: two copies of the plugin DLL were in `BepInEx/plugins` ("Skipping [SP2 Texture Mod 0.1.0] because a newer version exists"): same version, so it is arbitrary which one loads. The user must keep one. The user's crafts carry `[ARM t=.. h=.. b=..]` tags in part names (from another mod); this mod never touches part names.
+
 ## Phase 2: how to test
 
 1. Designer, craft open, press F10. Expect `[TEST] applied to N renderer(s) of M part(s)` and a colored checker on fuselage and wings (red grows along one texture axis, green along the other). Windows (other shader) and premade parts are skipped on purpose.
 2. Hover and select parts: the texture must stay. Paint a part with another color: it must stay (handled through `OnPaintedInDesigner`). Resize or edit a fuselage part: the texture must follow (handled by the `UpdateMesh` postfix).
 3. F10 again reverts everything (`[TEST] reverted`). The craft file is never modified (MaterialIds untouched).
 4. Flight: F10 in flight is only partly representative (meshes are merged at load); wings should show it, fuselage probably not. The real flight path needs the apply step before the merge (Phase 4).
-5. If the part shows a blank or wrong color instead of the checker, set `SupersampledStyle = true` in `BepInEx/config/com.sp2texturemod.cfg` and retry.
+5. F10 cycles: 1st press supersampled Albedo style, 2nd plain Albedo style, 3rd revert. Say which of the two shows the checker.
 
 Not saved anywhere: undo/redo and symmetry recreate parts, which lose the texture until F10 is pressed twice.
 
