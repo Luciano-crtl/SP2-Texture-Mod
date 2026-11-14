@@ -374,3 +374,5 @@ decompiled/
 tools/compile-check/Stubs/DiagnosticDumpStub.cs
 tools/compile-check/bin/
 tools/compile-check/obj/
+tools/logic-tests/bin/
+tools/logic-tests/obj/
