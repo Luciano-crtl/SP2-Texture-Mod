@@ -37,7 +37,9 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedModel;
         internal static ConfigEntry<float> TilesPerMeter;
         internal static ConfigEntry<bool> FlipModelX;
-        internal static ConfigEntry<float> NormalWeight;
+        internal static ConfigEntry<bool> ProjectAlongNormals;
+        internal static ConfigEntry<float> RayStart;
+        internal static ConfigEntry<float> FacingWeight;
         internal static ConfigEntry<float> MaxMatchDistance;
         internal static ConfigEntry<float> AdjustOffsetX;
         internal static ConfigEntry<float> AdjustOffsetY;
@@ -69,9 +71,14 @@ namespace SP2TextureMod
 
             FlipModelX = Config.Bind("Model", "FlipModelX", true,
                 "Mirror the OBJ on X when reading it, like most importers into Unity do. If the left and right sides of the texture come out swapped, set this to false.");
-            NormalWeight = Config.Bind("Model", "NormalWeight", 0.25f,
-                new ConfigDescription("How strongly a vertex prefers model surfaces that face the same way (square meters). Raise it if a wing top picks the bottom of the model.",
-                    new AcceptableValueRange<float>(0f, 10f)));
+            ProjectAlongNormals = Config.Bind("Model", "ProjectAlongNormals", true,
+                "On: each point of the craft is matched to the first model surface met by a ray going inwards along its normal (the way textures are baked from a detailed model). Off: the closest model surface.");
+            RayStart = Config.Bind("Model", "RayStart", 0.3f,
+                new ConfigDescription("How far outside the craft's surface the rays start (meters). It must be more than the craft sticks out of the model at any point.",
+                    new AcceptableValueRange<float>(0.02f, 3f)));
+            FacingWeight = Config.Bind("Model", "FacingWeight", 0.03f,
+                new ConfigDescription("Nearest-surface search and ray fallback: how strongly a point prefers model surfaces that face the same way (square meters). Keep it small: a large value picks far away surfaces.",
+                    new AcceptableValueRange<float>(0f, 1f)));
             MaxMatchDistance = Config.Bind("Model", "MaxMatchDistance", 0.75f,
                 new ConfigDescription("Vertices farther than this from the model are only counted in the log statistics (meters).",
                     new AcceptableValueRange<float>(0.01f, 50f)));
@@ -108,6 +115,7 @@ namespace SP2TextureMod
             try
             {
                 AtlasApplier.Tick();
+                UI.TexturePanel.Tick();
 
                 Key key = PanelKey.Value;
                 Keyboard keyboard = Keyboard.current;

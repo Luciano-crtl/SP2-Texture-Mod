@@ -96,6 +96,11 @@ namespace SP2TextureMod
                 foreach (string file in files)
                 {
                     string extension = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                    if (System.IO.Path.GetFileName(file).StartsWith("debug_", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue; // files written by the mod itself (debug_uv_map.png)
+                    }
+
                     Entry entry = new Entry();
                     entry.FileName = System.IO.Path.GetFileName(file);
                     entry.FilePath = file;

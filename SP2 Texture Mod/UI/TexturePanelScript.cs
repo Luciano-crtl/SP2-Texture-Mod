@@ -39,6 +39,7 @@ namespace SP2TextureMod.UI
             widget.FindWidget("tex-close-button").Clicked += (Widget w) => Close();
             content = widget.FindWidget("tex-content");
 
+            Plugin.Log.LogInfo("[UI] Textures panel created");
             TextureLibrary.Refresh();
             BuildContent();
         }
@@ -140,8 +141,25 @@ namespace SP2TextureMod.UI
 
         private void BuildAlignment()
         {
-            builder.Header("Model alignment", collapsed: true);
+            builder.Header("Model matching and alignment", collapsed: true);
             builder.Text("Note", "The model is aligned to the craft automatically. Adjust only if needed.");
+
+            Live("Orientation", () => AtlasApplier.OrientationText);
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Next orientation", AtlasApplier.NextOrientation),
+                new KeyValuePair<string, Action>("Align again", () => { AtlasApplier.InvalidateFit(); AtlasApplier.ReapplyIfActive(); }),
+            });
+
+            builder.Toggle("Project along normals",
+                "On: every point of the craft takes the texture from the first model surface met by a ray going inwards along its normal. Off: from the closest model surface.",
+                Plugin.ProjectAlongNormals.Value,
+                on =>
+                {
+                    SetValue(Plugin.ProjectAlongNormals, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
             builder.Toggle("Mirror model on X",
                 "Most importers mirror an OBJ on X when bringing it into Unity. Turn this off if the left and right sides of the texture come out swapped.",
                 Plugin.FlipModelX.Value,
@@ -149,9 +167,16 @@ namespace SP2TextureMod.UI
                 {
                     SetValue(Plugin.FlipModelX, on);
                     SaveConfig();
+                    AtlasApplier.InvalidateFit();
                     AtlasApplier.ReapplyIfActive();
                 });
 
+            FloatSetting(Plugin.RayStart, "Ray start distance",
+                "How far outside the craft's surface the rays start. It must be more than the craft sticks out of the model anywhere.",
+                0.01f, 0.02f, 1.5f, " m", AtlasApplier.ReapplyIfActive);
+            FloatSetting(Plugin.FacingWeight, "Facing preference",
+                "Nearest-surface search and fallback: preference for model surfaces that face the same way. Keep it small.",
+                0.005f, 0f, 0.3f, "", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.AdjustOffsetX, "Shift X", "Moves the model sideways after the automatic alignment.", 0.01f, -3f, 3f, " m", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.AdjustOffsetY, "Shift Y", "Moves the model up or down.", 0.01f, -3f, 3f, " m", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.AdjustOffsetZ, "Shift Z", "Moves the model forward or back.", 0.01f, -3f, 3f, " m", AtlasApplier.ReapplyIfActive);
@@ -159,13 +184,9 @@ namespace SP2TextureMod.UI
             FloatSetting(Plugin.AdjustRotationY, "Rotate Y", "Extra rotation about Y.", 0.1f, -30f, 30f, " deg", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.AdjustRotationZ, "Rotate Z", "Extra rotation about Z.", 0.1f, -30f, 30f, " deg", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.AdjustScale, "Scale", "Extra size of the model (1 = none).", 0.005f, 0.8f, 1.25f, "x", AtlasApplier.ReapplyIfActive);
-            FloatSetting(Plugin.NormalWeight, "Facing preference",
-                "How strongly a point of the craft prefers model surfaces that face the same way. Raise it if the top of a wing picks the bottom of the model.",
-                0.01f, 0f, 2f, "", AtlasApplier.ReapplyIfActive);
 
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
-                new KeyValuePair<string, Action>("Align again", () => { AtlasApplier.InvalidateFit(); AtlasApplier.ReapplyIfActive(); }),
                 new KeyValuePair<string, Action>("Reset adjustments", ResetAdjustments),
             });
         }

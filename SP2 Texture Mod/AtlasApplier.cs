@@ -66,10 +66,15 @@ namespace SP2TextureMod
 
         // The automatic alignment is kept while the aircraft, the model and the mirror setting stay the same,
         // so moving an adjustment slider is fast.
-        private static ModelAlignment _fitCache;
+        private static List<ModelAlignment> _fitCandidates;
+        private static int _fitChoice;
         private static AircraftScript _fitAircraft;
         private static string _fitModelPath;
         private static bool _fitFlip;
+
+        // How the UVs are looked up on the model (set while fitting, used for every renderer, also after edits).
+        private static UvTransfer.Options _options;
+        private static bool _frontFaces;
 
         // The parsed OBJ is kept between applications (parsing a large model takes a moment).
         private static string _cachePath;
@@ -146,7 +151,37 @@ namespace SP2TextureMod
         /// <summary>Forgets the automatic alignment so the next apply finds it again (after the craft changed a lot).</summary>
         public static void InvalidateFit()
         {
-            _fitCache = null;
+            _fitCandidates = null;
+            _fitChoice = 0;
+        }
+
+        /// <summary>Tries the next best orientation of the model (when the best one has the model upside-down, for instance).</summary>
+        public static void NextOrientation()
+        {
+            if (_fitCandidates == null || _fitCandidates.Count < 2)
+            {
+                StatusText = "No other orientation to try. Apply with a model first.";
+                return;
+            }
+
+            _fitChoice = (_fitChoice + 1) % _fitCandidates.Count;
+            ReapplyIfActive();
+        }
+
+        /// <summary>"2/6" and the quality of the orientation in use, for the panel.</summary>
+        public static string OrientationText
+        {
+            get
+            {
+                if (_fitCandidates == null || _fitCandidates.Count == 0)
+                {
+                    return "-";
+                }
+
+                ModelAlignment current = _fitCandidates[Mathf.Clamp(_fitChoice, 0, _fitCandidates.Count - 1)];
+                return (Mathf.Clamp(_fitChoice, 0, _fitCandidates.Count - 1) + 1) + "/" + _fitCandidates.Count
+                    + " (mean distance " + F(current.MeanDistance) + " m)";
+            }
         }
 
         /// <summary>After changing the image or the tiling: applies again with the new choice, if currently applied.</summary>
@@ -247,6 +282,7 @@ namespace SP2TextureMod
                 _model = null;
                 _bvh = null;
                 _alignment = null;
+                _options = null;
             }
 
             // 1. Which renderers can be textured.
@@ -350,15 +386,27 @@ namespace SP2TextureMod
             Plugin.Log.LogInfo(Tag + "applied '" + _textureName() + "' to " + renderers + " renderer(s) of " + parts + " part(s) in "
                 + watch.ElapsedMilliseconds + " ms | mode: " + mode
                 + " | skipped " + skipped + (skippedText.Length > 0 ? " (" + skippedText + ")" : ""));
+            string debugNote = "";
             if (transfer)
             {
                 Plugin.Log.LogInfo(Tag + "match quality: " + Stats.Describe(Plugin.MaxMatchDistance.Value));
+                try
+                {
+                    string mapPath = UvDebugMap.Write(_texture, Stats.Points);
+                    Plugin.Log.LogInfo(Tag + "UV debug map written to " + mapPath
+                        + " (red = vertices facing up, blue = facing down, green = sideways, yellow = nearest-surface fallback)");
+                    debugNote = " Debug map: " + UvDebugMap.FileName;
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogWarning(Tag + "could not write the UV debug map: " + ex.Message);
+                }
             }
 
             StatusText = "Applied to " + renderers + " renderers, mode: " + mode
                 + (transfer ? "\n" + fit : "")
                 + (transfer ? "\n" + Stats.Describe(Plugin.MaxMatchDistance.Value) : "")
-                + "\nPress the apply key again to remove. The craft file is not modified.";
+                + "\nThe craft file is not modified." + debugNote;
             _verifyFrame = Time.frameCount + 5;
         }
 
@@ -445,14 +493,19 @@ namespace SP2TextureMod
 
                 int stride = Mathf.Max(1, total / 700);
                 List<Vector3> samples = new List<Vector3>(800);
+                List<Vector3> sampleNormals = new List<Vector3>(800);
                 List<Vector3> vertices = new List<Vector3>();
+                List<Vector3> normals = new List<Vector3>();
                 Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
                 Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
                 int counter = 0;
                 foreach (Candidate c in candidates)
                 {
                     vertices.Clear();
+                    normals.Clear();
                     c.Map.Mesh.GetVertices(vertices);
+                    c.Map.Mesh.GetNormals(normals);
+                    bool hasNormals = normals.Count == vertices.Count;
                     Matrix4x4 toCraft = aircraft.transform.worldToLocalMatrix * c.Map.Renderer.transform.localToWorldMatrix;
                     for (int i = 0; i < vertices.Count; i++)
                     {
@@ -462,6 +515,7 @@ namespace SP2TextureMod
                         if (counter++ % stride == 0)
                         {
                             samples.Add(p);
+                            sampleNormals.Add(hasNormals ? toCraft.MultiplyVector(normals[i]).normalized : Vector3.zero);
                         }
                     }
                 }
@@ -470,25 +524,76 @@ namespace SP2TextureMod
                 bounds.SetMinMax(min, max);
 
                 System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-                bool reused = _fitCache != null && _fitAircraft == aircraft && _fitModelPath == _cachePath && _fitFlip == _cacheFlip;
-                ModelAlignment auto = reused ? _fitCache : ModelAlignment.Fit(_model, _bvh, samples, bounds);
-                _fitCache = auto;
-                _fitAircraft = aircraft;
-                _fitModelPath = _cachePath;
-                _fitFlip = _cacheFlip;
+                bool reused = _fitCandidates != null && _fitCandidates.Count > 0 && _fitAircraft == aircraft
+                    && _fitModelPath == _cachePath && _fitFlip == _cacheFlip;
+                if (!reused)
+                {
+                    _fitCandidates = ModelAlignment.FitCandidates(_model, _bvh, samples, bounds);
+                    _fitChoice = 0;
+                    _fitAircraft = aircraft;
+                    _fitModelPath = _cachePath;
+                    _fitFlip = _cacheFlip;
+
+                    System.Text.StringBuilder list = new System.Text.StringBuilder();
+                    for (int i = 0; i < _fitCandidates.Count; i++)
+                    {
+                        if (i > 0)
+                        {
+                            list.Append(" ; ");
+                        }
+
+                        list.Append(i + 1).Append(": ").Append(_fitCandidates[i].Summary);
+                    }
+
+                    Plugin.Log.LogInfo(Tag + "orientation candidates, best first: " + list);
+                }
+
+                _fitChoice = Mathf.Clamp(_fitChoice, 0, _fitCandidates.Count - 1);
+                ModelAlignment auto = _fitCandidates[_fitChoice];
                 _alignment = auto.WithAdjustment(
                     bounds.center,
                     new Vector3(Plugin.AdjustOffsetX.Value, Plugin.AdjustOffsetY.Value, Plugin.AdjustOffsetZ.Value),
                     new Vector3(Plugin.AdjustRotationX.Value, Plugin.AdjustRotationY.Value, Plugin.AdjustRotationZ.Value),
                     Plugin.AdjustScale.Value);
 
-                summary = (reused ? "Alignment (kept): " : "Alignment: ") + auto.Summary;
+                // Do the model's faces wind the way its normals need? Compare, at the matching points, the model's
+                // face normal with the craft's own (good) normals; if mostly opposite, the model is inside-out.
+                float agreement = FacingAgreement(samples, sampleNormals, _alignment);
+                string facing;
+                if (agreement < 0.5f)
+                {
+                    _bvh.SetNormalsInverted(!_bvh.NormalsInverted);
+                    float after = FacingAgreement(samples, sampleNormals, _alignment);
+                    facing = "model faces looked inside-out (" + Percent(agreement) + " agreement), turned around: now " + Percent(after);
+                    agreement = after;
+                }
+                else
+                {
+                    facing = "model faces agree with the craft's normals at " + Percent(agreement);
+                }
+
+                // With consistent faces only the faces that look at the ray count; otherwise the first surface hit does.
+                _frontFaces = agreement >= 0.75f;
+
+                _options = new UvTransfer.Options
+                {
+                    Project = Plugin.ProjectAlongNormals.Value,
+                    RayStartMeters = Plugin.RayStart.Value,
+                    MaxDistanceMeters = Plugin.MaxMatchDistance.Value,
+                    FrontFacesOnly = _frontFaces,
+                    FacingWeightSquareMeters = Plugin.FacingWeight.Value,
+                    FarLimitMeters = Plugin.MaxMatchDistance.Value
+                };
+
+                summary = "Orientation " + OrientationText + ": " + auto.Summary + ". " + facing;
                 Plugin.Log.LogInfo(Tag + "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z)
-                    + ") | alignment " + (reused ? "kept from before" : "found in " + watch.ElapsedMilliseconds + " ms") + ": " + auto.Summary);
+                    + ") | alignment " + (reused ? "kept from before" : "found in " + watch.ElapsedMilliseconds + " ms")
+                    + " | using " + summary + " | method: " + (_options.Project ? "project along normals" : "nearest surface")
+                    + ", front faces only: " + _frontFaces);
                 if (auto.MeanDistance > 0.08f * Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)))
                 {
                     Plugin.Log.LogWarning(Tag + "the model does not fit the craft well (mean distance is large). "
-                        + "Is it the same aircraft? Use the Adjust* settings or try the setting FlipModelX = false.");
+                        + "Is it the same aircraft? Try the next orientation, the Adjust settings or FlipModelX = false.");
                 }
 
                 return true;
@@ -498,8 +603,45 @@ namespace SP2TextureMod
                 Plugin.Log.LogWarning(Tag + "could not align the model, tiling instead: " + ex);
                 StatusText = "Could not align the model, tiling instead: " + ex.Message;
                 _alignment = null;
+                _options = null;
                 return false;
             }
+        }
+
+        // Share of the samples whose nearest model face points the same way as the craft's normal there.
+        private static float FacingAgreement(List<Vector3> positions, List<Vector3> normals, ModelAlignment alignment)
+        {
+            int agree = 0;
+            int total = 0;
+            for (int i = 0; i < positions.Count; i++)
+            {
+                if (normals[i].sqrMagnitude < 0.5f)
+                {
+                    continue;
+                }
+
+                Vector3 pObj = alignment.CraftToObj.MultiplyPoint3x4(positions[i]);
+                int triangle;
+                float u, v, w, distanceSquared;
+                if (!_bvh.Nearest(pObj, Vector3.zero, 0f, out triangle, out u, out v, out w, out distanceSquared))
+                {
+                    continue;
+                }
+
+                Vector3 faceNormal = alignment.ObjToCraft.MultiplyVector(_bvh.NormalOf(triangle)).normalized;
+                total++;
+                if (Vector3.Dot(faceNormal, normals[i]) > 0f)
+                {
+                    agree++;
+                }
+            }
+
+            return total == 0 ? 1f : (float)agree / total;
+        }
+
+        private static string Percent(float fraction)
+        {
+            return (100f * fraction).ToString("0", CultureInfo.InvariantCulture) + "%";
         }
 
         private static bool IsEligible(ThemeScript theme, PartMaterialScript.RendererMaterialMap map, out string reason)
@@ -571,10 +713,9 @@ namespace SP2TextureMod
                 }
 
                 Mesh mesh = map.Mesh;
-                if (_alignment != null && _model != null && _bvh != null)
+                if (_alignment != null && _model != null && _bvh != null && _options != null)
                 {
-                    UvTransfer.Write(mesh, map.Renderer.transform, aircraft.transform, _model, _bvh, _alignment,
-                        Plugin.NormalWeight.Value, Plugin.MaxMatchDistance.Value, Stats);
+                    UvTransfer.Write(mesh, map.Renderer.transform, aircraft.transform, _model, _bvh, _alignment, _options, Stats);
                 }
                 else
                 {
@@ -774,6 +915,7 @@ namespace SP2TextureMod
             _model = null;
             _bvh = null;
             _alignment = null;
+            _options = null;
             _activeAircraft = null;
             _verifyFrame = -1;
             StatusText = "Removed (" + renderers + " renderers restored).";

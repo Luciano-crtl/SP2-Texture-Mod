@@ -5,25 +5,86 @@ using UnityEngine;
 namespace SP2TextureMod
 {
     /// <summary>
-    /// Writes UV0 of a part mesh by copying the UV of the closest point of the War Thunder model.
-    /// Each vertex is looked up independently; the search prefers model triangles that face the same way
-    /// as the vertex normal, so the top of a wing does not pick the bottom of the model.
+    /// Writes UV0 of a part mesh by copying the UV of the War Thunder model at the matching point.
+    /// Two ways to find it:
+    ///  - project: a ray starts a little outside the vertex and goes inwards along the vertex normal; the first
+    ///    model surface it meets is the match. This is how textures are baked from a detailed model onto a
+    ///    simple one: it never lands on the other skin of a thin wing or on parts inside the fuselage, and it
+    ///    does not depend on how the model's faces wind when frontFacesOnly is off;
+    ///  - nearest: the closest model surface (with a small preference for surfaces facing the same way).
+    /// The projection falls back to the nearest surface where the ray misses (silhouettes, edges).
     /// </summary>
     internal static class UvTransfer
     {
+        internal sealed class Options
+        {
+            /// <summary>true = project along the normal, false = nearest surface.</summary>
+            public bool Project;
+
+            /// <summary>How far outside the vertex the ray starts (meters).</summary>
+            public float RayStartMeters;
+
+            /// <summary>How far past the vertex a hit is still accepted (meters).</summary>
+            public float MaxDistanceMeters;
+
+            /// <summary>Only model faces that face the ray's origin count (needs a model whose faces wind consistently).</summary>
+            public bool FrontFacesOnly;
+
+            /// <summary>Preference for same-facing surfaces in the nearest search (square meters).</summary>
+            public float FacingWeightSquareMeters;
+
+            /// <summary>Distance beyond which a match is counted as "far" in the statistics (meters).</summary>
+            public float FarLimitMeters;
+        }
+
+        internal struct DebugPoint
+        {
+            public Vector2 Uv;
+            public byte Kind; // 0 = faces up, 1 = faces down, 2 = faces sideways
+            public bool Fallback;
+        }
+
         internal sealed class Stats
         {
             public long Vertices;
+            public long Rays;
             public long Far;
             public double SumDistance;
             public float MaxDistance;
+            public readonly long[] Count = new long[3];
+            public readonly long[] Agree = new long[3];
+            public readonly double[] SumHeight = new double[3];
+            public readonly List<DebugPoint> Points = new List<DebugPoint>();
+
+            private const int MaxPoints = 400000;
 
             public void Reset()
             {
                 Vertices = 0;
+                Rays = 0;
                 Far = 0;
                 SumDistance = 0;
                 MaxDistance = 0f;
+                for (int i = 0; i < 3; i++)
+                {
+                    Count[i] = 0;
+                    Agree[i] = 0;
+                    SumHeight[i] = 0;
+                }
+
+                Points.Clear();
+            }
+
+            public void AddPoint(Vector2 uv, int kind, bool fallback)
+            {
+                if (Points.Count < MaxPoints)
+                {
+                    DebugPoint point = new DebugPoint();
+                    point.Uv = uv;
+                    point.Kind = (byte)kind;
+                    point.Fallback = fallback;
+                    Points.Add(point);
+                }
             }
 
             public string Describe(float farLimit)
@@ -34,16 +95,32 @@ namespace SP2TextureMod
                 }
 
                 return "vertices=" + Vertices
-                    + " meanDistance=" + (SumDistance / Vertices).ToString("0.###", CultureInfo.InvariantCulture) + " m"
-                    + " maxDistance=" + MaxDistance.ToString("0.###", CultureInfo.InvariantCulture) + " m"
-                    + " farther than " + farLimit.ToString("0.##", CultureInfo.InvariantCulture) + " m: " + Far
-                    + " (" + (100.0 * Far / Vertices).ToString("0.#", CultureInfo.InvariantCulture) + "%)";
+                    + ", by ray " + F(100.0 * Rays / Vertices) + "%"
+                    + " | distance mean " + F(SumDistance / Vertices) + " m, max " + F(MaxDistance) + " m, over " + F(farLimit) + " m: " + Far
+                    + " | faces up: " + DescribeKind(0) + " | faces down: " + DescribeKind(1) + " | sideways: " + DescribeKind(2);
+            }
+
+            // For a kind of vertex: how many, how often the matched model face points the same way, and how far
+            // above (+) or below (-) the vertex the matched point is on average (a top that matches below is wrong).
+            private string DescribeKind(int kind)
+            {
+                if (Count[kind] == 0)
+                {
+                    return "0";
+                }
+
+                return Count[kind] + " (agree " + F(100.0 * Agree[kind] / Count[kind]) + "%, match "
+                    + F(SumHeight[kind] / Count[kind]) + " m high)";
+            }
+
+            private static string F(double value)
+            {
+                return value.ToString("0.##", CultureInfo.InvariantCulture);
             }
         }
 
         public static void Write(Mesh mesh, Transform rendererTransform, Transform craftRoot,
-            ObjModel model, TriangleBvh bvh, ModelAlignment alignment,
-            float normalWeightSquareMeters, float farLimitMeters, Stats stats)
+            ObjModel model, TriangleBvh bvh, ModelAlignment alignment, Options options, Stats stats)
         {
             int count = mesh.vertexCount;
 
@@ -55,42 +132,79 @@ namespace SP2TextureMod
 
             Matrix4x4 toCraft = craftRoot.worldToLocalMatrix * rendererTransform.localToWorldMatrix;
             Matrix4x4 craftToObj = alignment.CraftToObj;
+            Matrix4x4 objToCraft = alignment.ObjToCraft;
             float scale = Mathf.Max(alignment.Scale, 1e-6f);
-            float weightInObjUnits = normalWeightSquareMeters / (scale * scale);
+            float rayStartObj = options.RayStartMeters / scale;
+            float rayRangeObj = (options.RayStartMeters + options.MaxDistanceMeters) / scale;
+            float weightObj = options.FacingWeightSquareMeters / (scale * scale);
 
             List<Vector2> uvs = new List<Vector2>(count);
             for (int i = 0; i < count; i++)
             {
-                Vector3 p = craftToObj.MultiplyPoint3x4(toCraft.MultiplyPoint3x4(vertices[i]));
-                Vector3 n = Vector3.zero;
-                if (hasNormals)
+                Vector3 pCraft = toCraft.MultiplyPoint3x4(vertices[i]);
+                Vector3 nCraft = hasNormals ? toCraft.MultiplyVector(normals[i]).normalized : Vector3.zero;
+                Vector3 p = craftToObj.MultiplyPoint3x4(pCraft);
+                Vector3 n = hasNormals ? craftToObj.MultiplyVector(nCraft).normalized : Vector3.zero;
+
+                int triangle = -1;
+                float u = 0f, v = 0f, w = 0f;
+                bool byRay = false;
+                bool matched = false;
+
+                if (options.Project && hasNormals)
                 {
-                    n = craftToObj.MultiplyVector(toCraft.MultiplyVector(normals[i])).normalized;
+                    float hit;
+                    matched = bvh.Raycast(p + n * rayStartObj, -n, rayRangeObj, options.FrontFacesOnly,
+                        out triangle, out u, out v, out w, out hit);
+                    byRay = matched;
                 }
 
-                int triangle;
-                float u, v, w, distanceSquared;
-                if (bvh.Nearest(p, n, weightInObjUnits, out triangle, out u, out v, out w, out distanceSquared))
+                if (!matched)
                 {
-                    uvs.Add(u * model.UvA[triangle] + v * model.UvB[triangle] + w * model.UvC[triangle]);
-
-                    float meters = Mathf.Sqrt(distanceSquared) * scale;
-                    stats.Vertices++;
-                    stats.SumDistance += meters;
-                    if (meters > stats.MaxDistance)
-                    {
-                        stats.MaxDistance = meters;
-                    }
-
-                    if (meters > farLimitMeters)
-                    {
-                        stats.Far++;
-                    }
+                    float distanceSquared;
+                    matched = bvh.Nearest(p, n, weightObj, out triangle, out u, out v, out w, out distanceSquared);
                 }
-                else
+
+                if (!matched)
                 {
                     uvs.Add(Vector2.zero);
+                    continue;
                 }
+
+                Vector2 uv = u * model.UvA[triangle] + v * model.UvB[triangle] + w * model.UvC[triangle];
+                uvs.Add(uv);
+
+                // Statistics: where the match landed relative to the vertex.
+                Vector3 matchObj = u * model.A[triangle] + v * model.B[triangle] + w * model.C[triangle];
+                Vector3 matchCraft = objToCraft.MultiplyPoint3x4(matchObj);
+                float meters = (matchCraft - pCraft).magnitude;
+                int kind = nCraft.y > 0.6f ? 0 : (nCraft.y < -0.6f ? 1 : 2);
+
+                stats.Vertices++;
+                if (byRay)
+                {
+                    stats.Rays++;
+                }
+
+                stats.SumDistance += meters;
+                if (meters > stats.MaxDistance)
+                {
+                    stats.MaxDistance = meters;
+                }
+
+                if (meters > options.FarLimitMeters)
+                {
+                    stats.Far++;
+                }
+
+                stats.Count[kind]++;
+                stats.SumHeight[kind] += matchCraft.y - pCraft.y;
+                if (hasNormals && Vector3.Dot(objToCraft.MultiplyVector(bvh.NormalOf(triangle)).normalized, nCraft) > 0f)
+                {
+                    stats.Agree[kind]++;
+                }
+
+                stats.AddPoint(uv, kind, !byRay);
             }
 
             mesh.SetUVs(0, uvs);

@@ -7,10 +7,14 @@ namespace SP2TextureMod
 {
     /// <summary>
     /// Finds the transform that puts a War Thunder OBJ model on top of the craft the user built, with no
-    /// manual work: the best of the 24 axis-aligned orientations (each scaled to the craft's bounds), then
-    /// a small coordinate-descent refinement of position, uniform scale and rotation. The quality measure
-    /// is the mean distance from sample points of the craft's surface to the model's surface (the worst
-    /// 15% are ignored, so parts the model does not have, like pylons or gear, do not spoil the fit).
+    /// manual work. For each of the 24 axis-aligned orientations the model is scaled to the craft's bounds;
+    /// the best few are refined (position, uniform scale, small rotations; coordinate descent) and returned
+    /// sorted, so the user can step to the next one when the best is not the right one.
+    /// The quality measure is the mean distance from sample points of the craft's surface to the model's
+    /// surface. Only the worst 2% are ignored: a thin, symmetric aircraft fits upside-down almost as well
+    /// as the right way up, and what tells them apart (the canopy, the belly) must not be trimmed away.
+    /// Orientations that keep the model's up axis up get a small bonus, since models and crafts are
+    /// practically never upside-down or on their side.
     /// </summary>
     internal sealed class ModelAlignment
     {
@@ -20,14 +24,21 @@ namespace SP2TextureMod
         /// <summary>Meters of craft per unit of the OBJ.</summary>
         public float Scale;
 
-        /// <summary>Trimmed mean distance in meters after fitting.</summary>
+        /// <summary>Mean distance in meters after fitting (only the worst 2% left out).</summary>
         public float MeanDistance;
+
+        /// <summary>MeanDistance with the up-axis bonus applied: what the candidates are sorted by.</summary>
+        public float Score;
 
         public string Summary;
 
+        private const float KeepFraction = 0.98f;
+        private const int RefineCount = 6;
+        private const float UpBonus = 0.9f;
+
         private static readonly Matrix4x4[] Orientations = BuildOrientations();
 
-        public static ModelAlignment Fit(ObjModel model, TriangleBvh bvh, List<Vector3> samples, Bounds craftBounds)
+        public static List<ModelAlignment> FitCandidates(ObjModel model, TriangleBvh bvh, List<Vector3> samples, Bounds craftBounds)
         {
             Vector3 objCenter = model.Bounds.center;
             Vector3 objSize = model.Bounds.size;
@@ -36,11 +47,13 @@ namespace SP2TextureMod
             float craftMax = Math.Max(craftSize.x, Math.Max(craftSize.y, craftSize.z));
             float[] scratch = new float[samples.Count];
 
-            // 1. Best of the 24 orientations, each scaled so the bounding boxes have a similar size.
-            float bestCost = float.MaxValue;
-            int bestOrientation = 0;
-            float[] bestX = null;
-            for (int k = 0; k < Orientations.Length; k++)
+            // 1. First guess of every orientation: bounding boxes of similar size, centered on each other.
+            int count = Orientations.Length;
+            float[][] starts = new float[count][];
+            float[] firstScore = new float[count];
+            float[] firstMean = new float[count];
+            int[] order = new int[count];
+            for (int k = 0; k < count; k++)
             {
                 Vector3 rotated = Abs(Orientations[k].MultiplyVector(objSize));
                 float sx = craftSize.x / Math.Max(rotated.x, 1e-4f);
@@ -49,20 +62,66 @@ namespace SP2TextureMod
                 float s0 = Mathf.Pow(Math.Max(sx * sy * sz, 1e-9f), 1f / 3f);
 
                 float[] x = { craftCenter.x, craftCenter.y, craftCenter.z, Mathf.Log(s0), 0f, 0f, 0f };
-                float cost = Evaluate(bvh, samples, Build(Orientations[k], objCenter, x), Mathf.Exp(x[3]), scratch);
-                if (cost < bestCost)
-                {
-                    bestCost = cost;
-                    bestOrientation = k;
-                    bestX = x;
-                }
+                starts[k] = x;
+                firstMean[k] = Evaluate(bvh, samples, Build(Orientations[k], objCenter, x), Mathf.Exp(x[3]), scratch);
+                firstScore[k] = firstMean[k] * Bonus(k);
+                order[k] = k;
             }
 
-            float startCost = bestCost;
+            float[] keys = (float[])firstScore.Clone();
+            Array.Sort(keys, order);
 
-            // 2. Coordinate descent on position (3), log scale (1) and small rotations (3).
-            float[] p = (float[])bestX.Clone();
-            float cur = bestCost;
+            // 2. Refine the best ones.
+            List<ModelAlignment> result = new List<ModelAlignment>();
+            int refine = Math.Min(RefineCount, count);
+            for (int r = 0; r < refine; r++)
+            {
+                int k = order[r];
+                float[] p = (float[])starts[k].Clone();
+                float mean = Refine(bvh, samples, Orientations[k], objCenter, p, craftMax, scratch);
+
+                ModelAlignment candidate = new ModelAlignment();
+                candidate.ObjToCraft = Build(Orientations[k], objCenter, p);
+                candidate.CraftToObj = candidate.ObjToCraft.inverse;
+                candidate.Scale = Mathf.Exp(p[3]);
+                candidate.MeanDistance = mean;
+                candidate.Score = mean * Bonus(k);
+                candidate.Summary = "orientation #" + k + " (" + (Bonus(k) < 1f ? "keeps up" : "tilted") + ") scale " + F(candidate.Scale)
+                    + " | mean distance " + F(mean) + " m (" + F(100f * mean / Math.Max(craftMax, 1e-4f)) + "% of the craft's largest size, "
+                    + samples.Count + " samples)";
+                result.Add(candidate);
+            }
+
+            result.Sort((a, b) => a.Score.CompareTo(b.Score));
+            return result;
+        }
+
+        /// <summary>
+        /// Applies the manual correction from the settings on top of an automatic fit: rotation and scale
+        /// about the craft's center, then a shift in meters.
+        /// </summary>
+        public ModelAlignment WithAdjustment(Vector3 craftCenter, Vector3 offset, Vector3 eulerDegrees, float scale)
+        {
+            Matrix4x4 adjust = Matrix4x4.Translate(craftCenter + offset)
+                * Matrix4x4.Rotate(Quaternion.Euler(eulerDegrees))
+                * Matrix4x4.Scale(new Vector3(scale, scale, scale))
+                * Matrix4x4.Translate(-craftCenter);
+
+            ModelAlignment result = new ModelAlignment();
+            result.ObjToCraft = adjust * ObjToCraft;
+            result.CraftToObj = result.ObjToCraft.inverse;
+            result.Scale = result.ObjToCraft.MultiplyVector(Vector3.right).magnitude;
+            result.MeanDistance = MeanDistance;
+            result.Score = Score;
+            result.Summary = Summary;
+            return result;
+        }
+
+        // Coordinate descent on position (3), log scale (1) and small rotations (3). Returns the mean distance.
+        private static float Refine(TriangleBvh bvh, List<Vector3> samples, Matrix4x4 orientation, Vector3 objCenter,
+            float[] p, float craftMax, float[] scratch)
+        {
+            float cur = Evaluate(bvh, samples, Build(orientation, objCenter, p), Mathf.Exp(p[3]), scratch);
             float[] step = { 0.05f * craftMax, 0.05f * craftMax, 0.05f * craftMax, 0.04f, 3f, 3f, 3f };
             for (int round = 0; round < 10; round++)
             {
@@ -72,7 +131,7 @@ namespace SP2TextureMod
                     {
                         float old = p[i];
                         p[i] = old + dir * step[i];
-                        float c = Evaluate(bvh, samples, Build(Orientations[bestOrientation], objCenter, p), Mathf.Exp(p[3]), scratch);
+                        float c = Evaluate(bvh, samples, Build(orientation, objCenter, p), Mathf.Exp(p[3]), scratch);
                         if (c < cur)
                         {
                             cur = c;
@@ -89,37 +148,7 @@ namespace SP2TextureMod
                 }
             }
 
-            ModelAlignment result = new ModelAlignment();
-            result.ObjToCraft = Build(Orientations[bestOrientation], objCenter, p);
-            result.CraftToObj = result.ObjToCraft.inverse;
-            result.Scale = Mathf.Exp(p[3]);
-            result.MeanDistance = cur;
-            result.Summary = "orientation #" + bestOrientation + " scale " + F(result.Scale)
-                + " rotation(" + F(p[4]) + ", " + F(p[5]) + ", " + F(p[6]) + ") deg offset from craft center("
-                + F(p[0] - craftCenter.x) + ", " + F(p[1] - craftCenter.y) + ", " + F(p[2] - craftCenter.z) + ") m"
-                + " | mean distance " + F(startCost) + " m at the first guess, " + F(cur) + " m after refining ("
-                + F(100f * cur / Math.Max(craftMax, 1e-4f)) + "% of the craft's largest size, " + samples.Count + " samples)";
-            return result;
-        }
-
-        /// <summary>
-        /// Applies the manual correction from the settings on top of the automatic fit: rotation and scale
-        /// about the craft's center, then a shift in meters.
-        /// </summary>
-        public ModelAlignment WithAdjustment(Vector3 craftCenter, Vector3 offset, Vector3 eulerDegrees, float scale)
-        {
-            Matrix4x4 adjust = Matrix4x4.Translate(craftCenter + offset)
-                * Matrix4x4.Rotate(Quaternion.Euler(eulerDegrees))
-                * Matrix4x4.Scale(new Vector3(scale, scale, scale))
-                * Matrix4x4.Translate(-craftCenter);
-
-            ModelAlignment result = new ModelAlignment();
-            result.ObjToCraft = adjust * ObjToCraft;
-            result.CraftToObj = result.ObjToCraft.inverse;
-            result.Scale = result.ObjToCraft.MultiplyVector(Vector3.right).magnitude;
-            result.MeanDistance = MeanDistance;
-            result.Summary = Summary;
-            return result;
+            return cur;
         }
 
         private static float Evaluate(TriangleBvh bvh, List<Vector3> samples, Matrix4x4 objToCraft, float scale, float[] scratch)
@@ -133,7 +162,7 @@ namespace SP2TextureMod
             }
 
             Array.Sort(scratch, 0, n);
-            int keep = Math.Max(1, (int)(n * 0.85f));
+            int keep = Math.Max(1, (int)(n * KeepFraction));
             float sum = 0f;
             for (int i = 0; i < keep; i++)
             {
@@ -153,6 +182,11 @@ namespace SP2TextureMod
                 * orientation
                 * Matrix4x4.Scale(new Vector3(s, s, s))
                 * Matrix4x4.Translate(-objCenter);
+        }
+
+        private static float Bonus(int orientationIndex)
+        {
+            return Orientations[orientationIndex].MultiplyVector(Vector3.up).y > 0.99f ? UpBonus : 1f;
         }
 
         // The 24 proper rotations that map the axes onto the axes (permutations with signs, determinant +1).

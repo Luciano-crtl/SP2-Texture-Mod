@@ -129,6 +129,174 @@ namespace SP2TextureMod
             return index;
         }
 
+        private bool _normalsInverted;
+
+        public bool NormalsInverted
+        {
+            get { return _normalsInverted; }
+        }
+
+        /// <summary>The (unit) normal of a triangle, as given by its winding (turned around if the model is marked inverted).</summary>
+        public Vector3 NormalOf(int triangle)
+        {
+            return _normal[triangle];
+        }
+
+        /// <summary>Marks the model as inside-out (its faces wind the other way) or not; sets the state, does not toggle.</summary>
+        public void SetNormalsInverted(bool inverted)
+        {
+            if (inverted == _normalsInverted)
+            {
+                return;
+            }
+
+            _normalsInverted = inverted;
+            for (int i = 0; i < _normal.Length; i++)
+            {
+                _normal[i] = -_normal[i];
+            }
+        }
+
+        /// <summary>
+        /// First triangle hit by a ray, up to maxDistance. With frontFacesOnly, triangles whose normal points
+        /// the same way as the ray (they face away from its origin) are skipped.
+        /// </summary>
+        public bool Raycast(Vector3 origin, Vector3 direction, float maxDistance, bool frontFacesOnly,
+            out int triangle, out float u, out float v, out float w, out float distance)
+        {
+            triangle = -1;
+            u = 0f;
+            v = 0f;
+            w = 0f;
+            distance = maxDistance;
+            if (_nodeCount == 0)
+            {
+                return false;
+            }
+
+            Vector3 inverse = new Vector3(SafeInverse(direction.x), SafeInverse(direction.y), SafeInverse(direction.z));
+            float best = maxDistance;
+
+            int sp = 0;
+            _stack[sp++] = 0;
+            while (sp > 0)
+            {
+                int ni = _stack[--sp];
+                if (!RayHitsBox(origin, inverse, ref _nodes[ni], best))
+                {
+                    continue;
+                }
+
+                if (_nodes[ni].Count > 0)
+                {
+                    int end = _nodes[ni].Start + _nodes[ni].Count;
+                    for (int k = _nodes[ni].Start; k < end; k++)
+                    {
+                        int t = _order[k];
+                        if (frontFacesOnly && Vector3.Dot(_normal[t], direction) >= 0f)
+                        {
+                            continue;
+                        }
+
+                        float hit, hu, hv, hw;
+                        if (RayHitsTriangle(origin, direction, _model.A[t], _model.B[t], _model.C[t], out hit, out hu, out hv, out hw)
+                            && hit < best)
+                        {
+                            best = hit;
+                            triangle = t;
+                            u = hu;
+                            v = hv;
+                            w = hw;
+                            distance = hit;
+                        }
+                    }
+                }
+                else
+                {
+                    _stack[sp++] = _nodes[ni].Left;
+                    _stack[sp++] = _nodes[ni].Right;
+                }
+            }
+
+            return triangle >= 0;
+        }
+
+        private static float SafeInverse(float x)
+        {
+            if (Math.Abs(x) < 1e-12f)
+            {
+                return x < 0f ? -1e12f : 1e12f;
+            }
+
+            return 1f / x;
+        }
+
+        // Slab test of a ray against a node's box; false if the box is missed or starts beyond maxT.
+        private static bool RayHitsBox(Vector3 o, Vector3 inverse, ref Node node, float maxT)
+        {
+            float t1 = (node.Min.x - o.x) * inverse.x;
+            float t2 = (node.Max.x - o.x) * inverse.x;
+            float tmin = Math.Min(t1, t2);
+            float tmax = Math.Max(t1, t2);
+
+            t1 = (node.Min.y - o.y) * inverse.y;
+            t2 = (node.Max.y - o.y) * inverse.y;
+            tmin = Math.Max(tmin, Math.Min(t1, t2));
+            tmax = Math.Min(tmax, Math.Max(t1, t2));
+
+            t1 = (node.Min.z - o.z) * inverse.z;
+            t2 = (node.Max.z - o.z) * inverse.z;
+            tmin = Math.Max(tmin, Math.Min(t1, t2));
+            tmax = Math.Min(tmax, Math.Max(t1, t2));
+
+            return tmax >= Math.Max(tmin, 0f) && tmin <= maxT;
+        }
+
+        // Moller-Trumbore, two-sided. (u, v, w) are the barycentric weights of corners A, B, C.
+        private static bool RayHitsTriangle(Vector3 o, Vector3 d, Vector3 a, Vector3 b, Vector3 c,
+            out float t, out float u, out float v, out float w)
+        {
+            t = 0f;
+            u = 0f;
+            v = 0f;
+            w = 0f;
+
+            Vector3 e1 = b - a;
+            Vector3 e2 = c - a;
+            Vector3 p = Vector3.Cross(d, e2);
+            float det = Vector3.Dot(e1, p);
+            if (Math.Abs(det) < 1e-12f)
+            {
+                return false;
+            }
+
+            float inv = 1f / det;
+            Vector3 s = o - a;
+            float wb = Vector3.Dot(s, p) * inv;
+            if (wb < 0f || wb > 1f)
+            {
+                return false;
+            }
+
+            Vector3 q = Vector3.Cross(s, e1);
+            float wc = Vector3.Dot(d, q) * inv;
+            if (wc < 0f || wb + wc > 1f)
+            {
+                return false;
+            }
+
+            t = Vector3.Dot(e2, q) * inv;
+            if (t < 0f)
+            {
+                return false;
+            }
+
+            u = 1f - wb - wc;
+            v = wb;
+            w = wc;
+            return true;
+        }
+
         /// <summary>Squared distance from p to the model surface (plain nearest point).</summary>
         public float NearestDistanceSquared(Vector3 p)
         {
