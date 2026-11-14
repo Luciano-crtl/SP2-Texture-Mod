@@ -22,6 +22,9 @@ namespace SP2TextureMod
         public Vector2[] UvC;
         public Bounds Bounds;
 
+        /// <summary>The range of the texture coordinates after they were brought into place, for the log.</summary>
+        public string UvRange = "";
+
         public int TriangleCount
         {
             get { return A.Length; }
@@ -163,12 +166,61 @@ namespace SP2TextureMod
             model.Bounds = new Bounds();
             model.Bounds.SetMinMax(min, max);
 
+            // Many exports write v in [-1, 0] (that is v - 1) and some islands sit a little outside [0, 1].
+            // A texture that repeats shows the same picture for v and v + 1, so the numbers are moved by a whole
+            // amount (the one that puts the middle of the texture coordinates inside [0, 1]); the texture itself
+            // must then repeat too, because some coordinates stay a little outside.
+            float shiftU;
+            float shiftV;
+            WholeShift(model, out shiftU, out shiftV);
+            if (shiftU != 0f || shiftV != 0f)
+            {
+                Vector2 shift = new Vector2(shiftU, shiftV);
+                for (int i = 0; i < model.UvA.Length; i++)
+                {
+                    model.UvA[i] += shift;
+                    model.UvB[i] += shift;
+                    model.UvC[i] += shift;
+                }
+            }
+
+            Vector2 uvMin = model.UvA[0];
+            Vector2 uvMax = model.UvA[0];
+            for (int i = 0; i < model.UvA.Length; i++)
+            {
+                uvMin = Vector2.Min(uvMin, Vector2.Min(model.UvA[i], Vector2.Min(model.UvB[i], model.UvC[i])));
+                uvMax = Vector2.Max(uvMax, Vector2.Max(model.UvA[i], Vector2.Max(model.UvB[i], model.UvC[i])));
+            }
+
+            model.UvRange = "u " + uvMin.x.ToString("0.###", CultureInfo.InvariantCulture) + ".." + uvMax.x.ToString("0.###", CultureInfo.InvariantCulture)
+                + ", v " + uvMin.y.ToString("0.###", CultureInfo.InvariantCulture) + ".." + uvMax.y.ToString("0.###", CultureInfo.InvariantCulture);
+            Plugin.Log.LogInfo("[OBJ] " + model.Name + ": texture coordinates " + model.UvRange
+                + " after shifting them by (" + shiftU.ToString("0", CultureInfo.InvariantCulture) + ", " + shiftV.ToString("0", CultureInfo.InvariantCulture) + ")");
+
             if (badLines > 0)
             {
                 Plugin.Log.LogWarning("[OBJ] " + model.Name + ": " + badLines + " line(s) could not be read and were skipped");
             }
 
             return model;
+        }
+
+        // The whole-number shift of u and v that puts the median of each inside [0, 1).
+        private static void WholeShift(ObjModel model, out float shiftU, out float shiftV)
+        {
+            int step = Math.Max(1, model.UvA.Length / 20000);
+            List<float> us = new List<float>();
+            List<float> vs = new List<float>();
+            for (int i = 0; i < model.UvA.Length; i += step)
+            {
+                us.Add(model.UvA[i].x);
+                vs.Add(model.UvA[i].y);
+            }
+
+            us.Sort();
+            vs.Sort();
+            shiftU = -Mathf.Floor(us[us.Count / 2]);
+            shiftV = -Mathf.Floor(vs[vs.Count / 2]);
         }
 
         private static void AddTriangle(List<Vector3> ta, List<Vector3> tb, List<Vector3> tc,

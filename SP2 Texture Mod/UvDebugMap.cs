@@ -44,8 +44,11 @@ namespace SP2TextureMod
                         : (point.Kind == 1 ? new Color32(60, 130, 255, 255) : new Color32(60, 230, 60, 255)));
 
                 // Texture coordinates have their origin at the bottom left, like the rows of the pixel array.
-                int px = Mathf.RoundToInt(point.Uv.x * (size - 1));
-                int py = Mathf.RoundToInt(point.Uv.y * (size - 1));
+                // The texture repeats, so a coordinate outside [0, 1] lands where it would be sampled.
+                float wu = point.Uv.x - Mathf.Floor(point.Uv.x);
+                float wv = point.Uv.y - Mathf.Floor(point.Uv.y);
+                int px = Mathf.RoundToInt(wu * (size - 1));
+                int py = Mathf.RoundToInt(wv * (size - 1));
                 for (int dy = 0; dy < 2; dy++)
                 {
                     for (int dx = 0; dx < 2; dx++)

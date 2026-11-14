@@ -15,7 +15,7 @@ namespace SP2TextureMod.UI
     public class TexturePanelScript : PanelDialogScript
     {
         private const float RefreshInterval = 0.5f;
-        private const int StatusRows = 4;
+        private const int DetailRows = 10;
 
         private Widget content;
         private PanelBuilder builder;
@@ -119,14 +119,19 @@ namespace SP2TextureMod.UI
                 new KeyValuePair<string, Action>("Remove", AtlasApplier.RemoveCurrent),
             });
 
-            // The result of the last apply, one line per row (the text has line breaks).
-            for (int i = 0; i < StatusRows; i++)
+            // The result of the last action, then the details of the last apply as short label/value rows.
+            Live("Status", () => AtlasApplier.StatusText ?? "");
+            for (int i = 0; i < DetailRows; i++)
             {
-                int line = i;
-                Live(i == 0 ? "Status" : "", () =>
+                int index = i;
+                TextControl row = builder.Text("", "");
+                refreshers.Add(() =>
                 {
-                    string[] lines = (AtlasApplier.StatusText ?? "").Split('\n');
-                    return line < lines.Length ? lines[line] : "";
+                    string[] pair = index < AtlasApplier.StatusRows.Count ? AtlasApplier.StatusRows[index] : null;
+                    string label = pair != null ? pair[0] : "";
+                    string value = pair != null ? pair[1] : "";
+                    if (row.LabelText != label) row.LabelText = label;
+                    if (row.ValueText.Text != value) row.ValueText.Text = value;
                 });
             }
         }

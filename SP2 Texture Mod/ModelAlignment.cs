@@ -33,7 +33,7 @@ namespace SP2TextureMod
         public string Summary;
 
         private const float KeepFraction = 0.98f;
-        private const int RefineCount = 6;
+        private const int RefineCount = 3;
         private const float UpBonus = 0.9f;
 
         private static readonly Matrix4x4[] Orientations = BuildOrientations();
@@ -123,7 +123,7 @@ namespace SP2TextureMod
         {
             float cur = Evaluate(bvh, samples, Build(orientation, objCenter, p), Mathf.Exp(p[3]), scratch);
             float[] step = { 0.05f * craftMax, 0.05f * craftMax, 0.05f * craftMax, 0.04f, 3f, 3f, 3f };
-            for (int round = 0; round < 10; round++)
+            for (int round = 0; round < 8; round++)
             {
                 for (int i = 0; i < 7; i++)
                 {

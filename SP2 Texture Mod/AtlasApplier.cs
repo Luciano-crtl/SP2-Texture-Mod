@@ -83,8 +83,24 @@ namespace SP2TextureMod
         private static ObjModel _cacheModel;
         private static TriangleBvh _cacheBvh;
 
-        /// <summary>One-line result shown on screen and in the log.</summary>
+        /// <summary>Short result of the last action, for the panel.</summary>
         public static string StatusText = "";
+
+        /// <summary>Details of the last apply as (label, short value) pairs, for the panel.</summary>
+        public static readonly List<string[]> StatusRows = new List<string[]>();
+
+        private static string _facingShort = "";
+
+        private static void SetStatus(string text)
+        {
+            StatusText = text;
+            StatusRows.Clear();
+        }
+
+        private static void StatusAdd(string label, string value)
+        {
+            StatusRows.Add(new[] { label, value });
+        }
 
         public static bool IsActive
         {
@@ -144,7 +160,7 @@ namespace SP2TextureMod
             }
             else
             {
-                StatusText = "Nothing to remove.";
+                SetStatus("Nothing to remove.");
             }
         }
 
@@ -160,7 +176,7 @@ namespace SP2TextureMod
         {
             if (_fitCandidates == null || _fitCandidates.Count < 2)
             {
-                StatusText = "No other orientation to try. Apply with a model first.";
+                SetStatus("No other orientation to try. Apply with a model first.");
                 return;
             }
 
@@ -276,7 +292,9 @@ namespace SP2TextureMod
                 transfer = PrepareModel(modelPath);
             }
 
-            _texture.wrapMode = transfer ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
+            // Always repeat: tiling needs it, and the model's texture coordinates may lie a little outside [0, 1].
+            // (With "clamp" a negative v, which many exports use, sampled one single row of the image.)
+            _texture.wrapMode = TextureWrapMode.Repeat;
             if (!transfer)
             {
                 _model = null;
@@ -328,10 +346,6 @@ namespace SP2TextureMod
             if (transfer)
             {
                 transfer = FitModel(aircraft, candidates, out fit);
-                if (!transfer)
-                {
-                    _texture.wrapMode = TextureWrapMode.Repeat;
-                }
             }
 
             // 3. Write UVs, styles and materials.
@@ -403,10 +417,26 @@ namespace SP2TextureMod
                 }
             }
 
-            StatusText = "Applied to " + renderers + " renderers, mode: " + mode
-                + (transfer ? "\n" + fit : "")
-                + (transfer ? "\n" + Stats.Describe(Plugin.MaxMatchDistance.Value) : "")
-                + "\nThe craft file is not modified." + debugNote;
+            StatusText = "Applied to " + renderers + " renderers in " + watch.ElapsedMilliseconds + " ms";
+            StatusRows.Clear();
+            StatusAdd("Mode", transfer ? "model UV transfer" : "tiled, " + F(Plugin.TilesPerMeter.Value) + " per meter");
+            if (transfer)
+            {
+                StatusAdd("Model", _model.Name);
+                StatusAdd("Orientation", OrientationText);
+                StatusAdd("Model faces", _facingShort);
+                StatusAdd("Match", Stats.MatchSummary());
+                StatusAdd("Faces up", Stats.KindSummary(0));
+                StatusAdd("Faces down", Stats.KindSummary(1));
+                StatusAdd("Sideways", Stats.KindSummary(2));
+                StatusAdd("Texture coords", Stats.UvRangeSummary());
+                if (debugNote.Length > 0)
+                {
+                    StatusAdd("Debug map", UvDebugMap.FileName);
+                }
+            }
+
+            StatusAdd("Craft file", "not modified");
             _verifyFrame = Time.frameCount + 5;
         }
 
@@ -449,7 +479,7 @@ namespace SP2TextureMod
                     if (model == null)
                     {
                         Plugin.Log.LogWarning(Tag + "model not used: " + error);
-                        StatusText = "Model not used: " + error;
+                        SetStatus("Model not used: " + error);
                         return false;
                     }
 
@@ -472,7 +502,7 @@ namespace SP2TextureMod
             catch (Exception ex)
             {
                 Plugin.Log.LogWarning(Tag + "model not used: " + ex.Message);
-                StatusText = "Model not used: " + ex.Message;
+                SetStatus("Model not used: " + ex.Message);
                 _model = null;
                 _bvh = null;
                 return false;
@@ -491,7 +521,7 @@ namespace SP2TextureMod
                     total += c.Map.Mesh.vertexCount;
                 }
 
-                int stride = Mathf.Max(1, total / 700);
+                int stride = Mathf.Max(1, total / 400);
                 List<Vector3> samples = new List<Vector3>(800);
                 List<Vector3> sampleNormals = new List<Vector3>(800);
                 List<Vector3> vertices = new List<Vector3>();
@@ -565,11 +595,13 @@ namespace SP2TextureMod
                     _bvh.SetNormalsInverted(!_bvh.NormalsInverted);
                     float after = FacingAgreement(samples, sampleNormals, _alignment);
                     facing = "model faces looked inside-out (" + Percent(agreement) + " agreement), turned around: now " + Percent(after);
+                    _facingShort = "turned around, " + Percent(agreement) + " to " + Percent(after);
                     agreement = after;
                 }
                 else
                 {
                     facing = "model faces agree with the craft's normals at " + Percent(agreement);
+                    _facingShort = "agree " + Percent(agreement);
                 }
 
                 // With consistent faces only the faces that look at the ray count; otherwise the first surface hit does.
@@ -601,7 +633,7 @@ namespace SP2TextureMod
             catch (Exception ex)
             {
                 Plugin.Log.LogWarning(Tag + "could not align the model, tiling instead: " + ex);
-                StatusText = "Could not align the model, tiling instead: " + ex.Message;
+                SetStatus("Could not align the model, tiling instead: " + ex.Message);
                 _alignment = null;
                 _options = null;
                 return false;
@@ -918,7 +950,7 @@ namespace SP2TextureMod
             _options = null;
             _activeAircraft = null;
             _verifyFrame = -1;
-            StatusText = "Removed (" + renderers + " renderers restored).";
+            SetStatus("Removed (" + renderers + " renderers restored).");
             Plugin.Log.LogInfo(Tag + "reverted " + renderers + " renderer(s)");
         }
 
@@ -970,7 +1002,7 @@ namespace SP2TextureMod
 
         private static void Fail(string message)
         {
-            StatusText = message;
+            SetStatus(message);
             Plugin.Log.LogWarning(Tag + message);
         }
 

@@ -25,7 +25,7 @@ namespace SP2TextureMod
         public const string Version = "0.1.0";
 
         // Which development phase this build contains (the version is only bumped when a whole set is done).
-        public const string Phase = "3b";
+        public const string Phase = "3c";
 
         internal static Plugin Instance;
         internal static ManualLogSource Log;

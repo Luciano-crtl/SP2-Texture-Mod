@@ -55,6 +55,10 @@ namespace SP2TextureMod
             public readonly long[] Agree = new long[3];
             public readonly double[] SumHeight = new double[3];
             public readonly List<DebugPoint> Points = new List<DebugPoint>();
+            public float MinU = float.MaxValue;
+            public float MaxU = float.MinValue;
+            public float MinV = float.MaxValue;
+            public float MaxV = float.MinValue;
 
             private const int MaxPoints = 400000;
 
@@ -73,6 +77,45 @@ namespace SP2TextureMod
                 }
 
                 Points.Clear();
+                MinU = float.MaxValue;
+                MaxU = float.MinValue;
+                MinV = float.MaxValue;
+                MaxV = float.MinValue;
+            }
+
+            public void TrackUv(Vector2 uv)
+            {
+                if (uv.x < MinU) MinU = uv.x;
+                if (uv.x > MaxU) MaxU = uv.x;
+                if (uv.y < MinV) MinV = uv.y;
+                if (uv.y > MaxV) MaxV = uv.y;
+            }
+
+            /// <summary>"by ray 86%, mean 0.10 m": the short form for the panel.</summary>
+            public string MatchSummary()
+            {
+                if (Vertices == 0)
+                {
+                    return "-";
+                }
+
+                return "ray " + F(100.0 * Rays / Vertices) + "%, mean " + F(SumDistance / Vertices) + " m, max " + F(MaxDistance) + " m";
+            }
+
+            public string UvRangeSummary()
+            {
+                return Vertices == 0 ? "-" : "u " + F(MinU) + ".." + F(MaxU) + ", v " + F(MinV) + ".." + F(MaxV);
+            }
+
+            /// <summary>"5440, agree 77%": how many vertices of a kind (0 up, 1 down, 2 sideways) and how often the matched face points the same way.</summary>
+            public string KindSummary(int kind)
+            {
+                if (Count[kind] == 0)
+                {
+                    return "0";
+                }
+
+                return Count[kind] + ", agree " + F(100.0 * Agree[kind] / Count[kind]) + "%";
             }
 
             public void AddPoint(Vector2 uv, int kind, bool fallback)
@@ -173,6 +216,7 @@ namespace SP2TextureMod
 
                 Vector2 uv = u * model.UvA[triangle] + v * model.UvB[triangle] + w * model.UvC[triangle];
                 uvs.Add(uv);
+                stats.TrackUv(uv);
 
                 // Statistics: where the match landed relative to the vertex.
                 Vector3 matchObj = u * model.A[triangle] + v * model.B[triangle] + w * model.C[triangle];
