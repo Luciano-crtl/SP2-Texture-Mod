@@ -93,6 +93,8 @@ namespace Assets.Scripts.Craft.Parts
 
     public class PartData
     {
+        public Vector3 Position { get; private set; }
+        public Vector3 Rotation { get; private set; }
         public int Id { get; set; }
         public string Name { get; set; }
         public PartScript PartScript { get; private set; }

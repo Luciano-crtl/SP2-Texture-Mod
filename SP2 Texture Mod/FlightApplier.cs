@@ -113,7 +113,7 @@ namespace SP2TextureMod
                 string reason;
                 if (map.Renderer == meshRenderer && AtlasApplier.IsEligible(session.Theme, map, out reason))
                 {
-                    ApplyRenderer(session, map);
+                    ApplyRenderer(session, part, map);
                 }
             }
 
@@ -232,6 +232,7 @@ namespace SP2TextureMod
                     return session;
                 }
 
+                CheckFrame(session);
                 session.Milliseconds = watch.ElapsedMilliseconds;
                 session.Active = true;
                 Plugin.Log.LogInfo(Tag + "the craft '" + name + "' has a saved texture: image '" + assignment.Image + "', "
@@ -391,6 +392,107 @@ namespace SP2TextureMod
             return text.Length > 0 ? text : "none";
         }
 
+        // ------------------------------------------------------------------ the craft's own space in flight
+
+        // The matrix that takes a renderer's mesh to the craft's own space (the one the saved alignment is in).
+        // In flight the bodies are moved to where the aircraft spawns, so the chain of transforms up to the aircraft
+        // object (what the designer uses) is off by the spawn position (the first flight log showed it: ~1900 m).
+        // The part's pose in the craft file (Position, Rotation: how the game placed it at load) does not move, and
+        // the renderer's pose relative to its part does not either.
+        private static Matrix4x4 RendererToCraft(PartScript part, Renderer renderer)
+        {
+            PartData data = part.Part;
+            Matrix4x4 partToCraft = Matrix4x4.TRS(data.Position, Quaternion.Euler(data.Rotation), part.transform.localScale);
+            Matrix4x4 rendererToPart = part.transform.worldToLocalMatrix * renderer.transform.localToWorldMatrix;
+            return partToCraft * rendererToPart;
+        }
+
+        // Size and center of everything that will be textured, in the craft's own space.
+        private static bool MeasureBounds(Session s, out Bounds bounds)
+        {
+            bounds = new Bounds();
+            Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+            bool any = false;
+            List<Vector3> vertices = new List<Vector3>();
+            foreach (PartData data in s.Aircraft.Parts)
+            {
+                PartScript part = data != null ? data.PartScript : null;
+                if (part == null || part.PartMaterialScript == null)
+                {
+                    continue;
+                }
+
+                foreach (PartMaterialScript.RendererMaterialMap map in part.PartMaterialScript.RendererMaps)
+                {
+                    string reason;
+                    if (!AtlasApplier.IsEligible(s.Theme, map, out reason))
+                    {
+                        continue;
+                    }
+
+                    Matrix4x4 toCraft = RendererToCraft(part, map.Renderer);
+                    vertices.Clear();
+                    map.Mesh.GetVertices(vertices);
+                    for (int i = 0; i < vertices.Count; i++)
+                    {
+                        Vector3 p = toCraft.MultiplyPoint3x4(vertices[i]);
+                        min = Vector3.Min(min, p);
+                        max = Vector3.Max(max, p);
+                        any = true;
+                    }
+                }
+            }
+
+            if (any)
+            {
+                bounds.SetMinMax(min, max);
+            }
+
+            return any;
+        }
+
+        // The craft's size and place are compared with what they were when the alignment was made. The same size at
+        // another place means the frame is shifted (the alignment is moved by the same amount); another size means the
+        // craft was changed after the texture was applied (reported only).
+        private static void CheckFrame(Session s)
+        {
+            CraftAssignment a = s.Assignment;
+            Bounds bounds;
+            if (!MeasureBounds(s, out bounds))
+            {
+                return;
+            }
+
+            Transform root = s.Aircraft.transform;
+            string where = "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z) + "), center ("
+                + F(bounds.center.x) + ", " + F(bounds.center.y) + ", " + F(bounds.center.z) + "), aircraft object at ("
+                + F(root.position.x) + ", " + F(root.position.y) + ", " + F(root.position.z) + ")";
+            if (!a.HasBounds || s.Alignment == null)
+            {
+                Plugin.Log.LogInfo(Tag + where + " (nothing saved to compare with)");
+                return;
+            }
+
+            float size = Mathf.Max(a.BoundsSize.x, Mathf.Max(a.BoundsSize.y, a.BoundsSize.z));
+            Vector3 shift = bounds.center - a.BoundsCenter;
+            float changed = (bounds.size - a.BoundsSize).magnitude;
+            if (changed > 0.05f * size)
+            {
+                Plugin.Log.LogWarning(Tag + where + ": the craft is not the size it had when the texture was applied (saved size ("
+                    + F(a.BoundsSize.x) + ", " + F(a.BoundsSize.y) + ", " + F(a.BoundsSize.z) + ")). If the texture looks wrong, apply it again in the designer.");
+            }
+            else if (shift.magnitude > 0.02f * size)
+            {
+                s.Alignment = ModelAlignment.FromMatrix(Matrix4x4.Translate(shift) * a.ObjToCraft);
+                Plugin.Log.LogWarning(Tag + where + ": the craft is " + F(shift.magnitude) + " m away from where it was when the texture was applied; the alignment was moved by the same amount");
+            }
+            else
+            {
+                Plugin.Log.LogInfo(Tag + where + ": same size and place as when the texture was applied");
+            }
+        }
+
         // ------------------------------------------------------------------ putting it on
 
         private static void ApplyGroup(Session s, PartGroupScript group)
@@ -414,7 +516,7 @@ namespace SP2TextureMod
                         continue;
                     }
 
-                    if (ApplyRenderer(s, map))
+                    if (ApplyRenderer(s, part, map))
                     {
                         s.Renderers++;
                         any = true;
@@ -441,12 +543,12 @@ namespace SP2TextureMod
 
         // The same steps as in the designer, without anything to undo: texture coordinates, the albedo paint
         // style in UV1.x, tangents for the normal map, the texture's material, and "do not merge".
-        private static bool ApplyRenderer(Session s, PartMaterialScript.RendererMaterialMap map)
+        private static bool ApplyRenderer(Session s, PartScript part, PartMaterialScript.RendererMaterialMap map)
         {
             try
             {
                 Mesh mesh = map.Mesh;
-                Matrix4x4 toCraft = UvProjection.RendererToCraft(map.Renderer.transform, s.Aircraft.transform);
+                Matrix4x4 toCraft = RendererToCraft(part, map.Renderer);
                 if (s.Alignment != null)
                 {
                     UvTransfer.Write(mesh, toCraft, s.Model, s.Bvh, s.Alignment, s.Options, s.Stats);
