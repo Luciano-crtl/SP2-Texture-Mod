@@ -46,6 +46,7 @@ namespace SP2TextureMod
 
         private static Texture2D _texture;
         private static AircraftScript _activeAircraft;
+        private static int _verifyFrame = -1;
 
         private static PaintStyle Style
         {
@@ -58,6 +59,25 @@ namespace SP2TextureMod
         }
 
         // ------------------------------------------------------------------ entry points
+
+        /// <summary>Called every frame by the plugin; runs the delayed self-check after applying.</summary>
+        public static void Tick()
+        {
+            if (_verifyFrame < 0 || Time.frameCount < _verifyFrame)
+            {
+                return;
+            }
+
+            _verifyFrame = -1;
+            try
+            {
+                Verify();
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(Tag + "verify failed: " + ex);
+            }
+        }
 
         /// <summary>Hotkey: applies the test texture to the current aircraft, or reverts it if already applied.</summary>
         public static void ToggleCurrent()
@@ -214,6 +234,76 @@ namespace SP2TextureMod
                 + " ms | style=" + Style + " shaderIndex=" + albedoIndex + " tilesPerMeter=" + Plugin.TestTilesPerMeter.Value
                 + " | skipped " + skipped + (skippedText.Length > 0 ? " (" + skippedText + ")" : ""));
             Plugin.Log.LogInfo(Tag + "press the key again to revert. The craft file is not modified.");
+            _verifyFrame = Time.frameCount + 5;
+        }
+
+        // Runs a few frames after applying and writes what the renderers really use now, so a blank
+        // result can be traced to the exact step that failed (material, texture, style, UV).
+        private static void Verify()
+        {
+            if (_activeAircraft == null || Parts.Count == 0)
+            {
+                return;
+            }
+
+            ThemeScript theme = _activeAircraft.Theme;
+            Material atlas;
+            if (theme == null || !AtlasMaterials.TryGetValue(theme, out atlas) || atlas == null)
+            {
+                Plugin.Log.LogWarning(Tag + "verify: the atlas material no longer exists");
+                return;
+            }
+
+            Texture bound = atlas.GetTexture(BaseMapId);
+            Plugin.Log.LogInfo(Tag + "verify: material '" + atlas.name + "' shader='" + atlas.shader.name + "' hasBaseMap=" + atlas.HasProperty(BaseMapId)
+                + " baseMap=" + (bound != null ? bound.name + " " + bound.width + "x" + bound.height : "NULL")
+                + " renderQueue=" + atlas.renderQueue);
+
+            int index = AlbedoShaderIndex(theme);
+            Vector4[] data = atlas.GetVectorArray("_MaterialData");
+            if (data != null && data.Length > index * 10 + 2)
+            {
+                Plugin.Log.LogInfo(Tag + "verify: _MaterialData length=" + data.Length + " albedo entry (index " + index + "): header="
+                    + data[index * 10] + " color=" + data[index * 10 + 1] + " metallic/smoothness/emission=" + data[index * 10 + 2]
+                    + " (header.x is the paint style; the Albedo style must be 3, supersampled 4)");
+            }
+            else
+            {
+                Plugin.Log.LogWarning(Tag + "verify: _MaterialData is missing or too short (" + (data != null ? data.Length : -1) + ")");
+            }
+
+            int shown = 0;
+            foreach (PartState state in Parts.Values)
+            {
+                foreach (RendererState rs in state.Renderers.Values)
+                {
+                    if (shown >= 4)
+                    {
+                        return;
+                    }
+
+                    Renderer renderer = rs.Map.Renderer;
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    shown++;
+                    Material[] now = renderer.sharedMaterials;
+                    int usingAtlas = 0;
+                    for (int i = 0; i < now.Length; i++)
+                    {
+                        if (now[i] == atlas)
+                        {
+                            usingAtlas++;
+                        }
+                    }
+
+                    Plugin.Log.LogInfo(Tag + "verify: part '" + state.Part.Part.Name + "' #" + state.Part.Part.Id + " renderer '" + renderer.name
+                        + "' submeshes using the atlas material=" + usingAtlas + "/" + now.Length
+                        + " enabled=" + renderer.enabled + " | " + DiagnosticDump.MeshSummary(rs.Map.Mesh));
+                }
+            }
         }
 
         private static bool IsEligible(ThemeScript theme, PartMaterialScript.RendererMaterialMap map, out string reason)

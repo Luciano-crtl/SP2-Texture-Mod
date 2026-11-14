@@ -68,6 +68,8 @@ namespace SP2TextureMod
         {
             try
             {
+                AtlasApplier.Tick();
+
                 Keyboard keyboard = Keyboard.current;
                 if (keyboard == null)
                 {

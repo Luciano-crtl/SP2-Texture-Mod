@@ -376,6 +376,12 @@ namespace SP2TextureMod
             return sb.ToString();
         }
 
+        internal static string MeshSummary(Mesh mesh)
+        {
+            Uv0State state;
+            return DescribeMesh(mesh, out state);
+        }
+
         private static string DescribeMesh(Mesh mesh, out Uv0State state)
         {
             if (mesh == null)
