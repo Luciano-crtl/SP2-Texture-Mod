@@ -20,13 +20,33 @@ Decals (the game's own `CraftDecals.xml` system, full RGBA, projected) remain th
 
 | Phase | What | State |
 |---|---|---|
-| 1 | Plugin loads, logs version, `[COMPAT]` reflection check, `[DIAG]` dump (hotkey, default F9) | written, syntax-checked, **not compiled, not run** |
-| 2 | Albedo path test: generated checkerboard + trivial per-part box-projection UV on every procedural part; must survive designer edits, flight, mesh combine | not started |
+| 1 | Plugin loads, logs version, `[COMPAT]` reflection check, `[DIAG]` dump (hotkey, default F9) | **done, verified in the game** (log received, 62 compat checks OK) |
+| 2 | Albedo path test (hotkey F10 toggles): generated checker + box-projection UV0 on every procedural part, UV1.x -> reserved Albedo style, private clone of the part material; re-applied after mesh rebuild and after paint; must also be tried in flight | written, syntax-checked, **not compiled, not run** |
 | 3 | Load atlas (PNG/JPG; TGA and DDS later) and OBJ; ghost preview and alignment; UV transfer with subdivision | not started |
 | 4 | Juicy panel and settings; persistence per craft | not started |
 | 5 | Multiplayer (default for now: local only) | not started |
 
 Decisions taken without asking (change if the user disagrees): local-only textures; hotkey F9 for the dump; no textures bundled in the mod (War Thunder assets belong to Gaijin; each user loads their own files).
+
+## Phase 1 results (verified in the game, user's log)
+
+Game 0.1.100, Unity 6000.3.20, BepInEx 5.4.23.5. User's test craft: 93 parts, 145 renderers, 64645 vertices.
+- Shader of parts: `Game/Parts/Part - Default` (and `Game/Parts/Part - Transparent` for windows). Properties: `_SinglePlaneTextureColorMask`, `_TriPlaneTextureColorMask`, `_UseBakedPositionsAndNormals`, **`_BaseMap`** (albedo; no `_MainTex`, no `_BaseColor`), `_SupersampleMipmapBias`, `_BumpMap`, `_BumpScale`, `_OcclusionMap`, `_OcclusionStrength`, `_ParallaxMap`, `_Parallax`, `_EmissionColor`, `_EmissiveOverride`, `_EmissiveOverrideNight`, `_Alpha`, `_WaterHeight`, `_UseSimpleLightingEnabled`, `_RECEIVE_SHADOWS`. No keywords enabled on the shared material.
+- Reserved materials: `AlbedoTexture` id=-5 shaderIndex=24 styleValue=3; `AlbedoTextureSupersampledWithMipmapBias` id=-6 shaderIndex=25 styleValue=4 (theme "Custom" had 26 materials).
+- UV0 of procedural meshes (Fuselage, Glass Fuselage, Nosecone, Wing, Flap, Window): **all zero**, confirmed. Premade parts (gun, rotator, wheel, propeller cap...) have real UV0 but use shared meshes (`uniqueMesh=False`): never modify those.
+- Procedural meshes are readable and unique (`uniqueMesh=True`). Typical size 250-1000 vertices; this craft has 51 fuselage parts, 6 wings, 11 flaps, 5 windows.
+- `Wing`, `Flap`, `Window` and `Propeller Assembly` have `combine=False` (never merged in flight); `Fuselage` has `combine=True`. 22 renderers already `excludeCombine=True` (flaps, wheels).
+- Another BepInEx plugin was loaded: "SP2 Reference Model 0.7.0" (injects controls into the designer main menu). Ask the user whether it is theirs: it may already hold the reference model transform that Phase 3 needs.
+
+## Phase 2: how to test
+
+1. Designer, craft open, press F10. Expect `[TEST] applied to N renderer(s) of M part(s)` and a colored checker on fuselage and wings (red grows along one texture axis, green along the other). Windows (other shader) and premade parts are skipped on purpose.
+2. Hover and select parts: the texture must stay. Paint a part with another color: it must stay (handled through `OnPaintedInDesigner`). Resize or edit a fuselage part: the texture must follow (handled by the `UpdateMesh` postfix).
+3. F10 again reverts everything (`[TEST] reverted`). The craft file is never modified (MaterialIds untouched).
+4. Flight: F10 in flight is only partly representative (meshes are merged at load); wings should show it, fuselage probably not. The real flight path needs the apply step before the merge (Phase 4).
+5. If the part shows a blank or wrong color instead of the checker, set `SupersampledStyle = true` in `BepInEx/config/com.sp2texturemod.cfg` and retry.
+
+Not saved anywhere: undo/redo and symmetry recreate parts, which lose the texture until F10 is pressed twice.
 
 ## Phase 1: how to test
 

@@ -44,7 +44,7 @@ namespace SP2TextureMod
                 return;
             }
 
-            Plugin.Log.LogInfo(Tag + "===== dump begin | mod v" + Plugin.Version + " | context=" + context + " =====");
+            Plugin.Log.LogInfo(Tag + "===== dump begin | mod v" + Plugin.Version + " phase " + Plugin.Phase + " | context=" + context + " =====");
 
             HashSet<string> seenShaders = new HashSet<string>();
             try { DumpAircraft(aircraft); }
@@ -61,7 +61,7 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ finding the aircraft
 
-        private static AircraftScript FindAircraft(out string context)
+        internal static AircraftScript FindAircraft(out string context)
         {
             context = "none";
 

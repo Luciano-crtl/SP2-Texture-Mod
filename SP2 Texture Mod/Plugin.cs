@@ -22,10 +22,16 @@ namespace SP2TextureMod
         // Shown in the log. If the log shows an older number, the old DLL is still in BepInEx\plugins.
         public const string Version = "0.1.0";
 
+        // Which development phase this build contains (the version is only bumped when a whole set is done).
+        public const string Phase = "2";
+
         internal static ManualLogSource Log;
 
         internal static ConfigEntry<Key> DumpKey;
         internal static ConfigEntry<int> DumpMaxParts;
+        internal static ConfigEntry<Key> TestKey;
+        internal static ConfigEntry<float> TestTilesPerMeter;
+        internal static ConfigEntry<bool> SupersampledStyle;
 
         private Harmony _harmony;
         private bool _updateErrorLogged;
@@ -40,14 +46,22 @@ namespace SP2TextureMod
                 new ConfigDescription("Maximum number of parts listed in detail by the diagnostic dump.",
                     new AcceptableValueRange<int>(1, 2000)));
 
-            Log.LogInfo(PluginName + " v" + Version + " loaded | Unity " + Application.unityVersion + " | game " + Application.version);
+            TestKey = Config.Bind("Test texture", "TestKey", Key.F10,
+                "Key that puts a generated checker texture on the procedural parts of the current aircraft and removes it on the second press. Use None to disable.");
+            TestTilesPerMeter = Config.Bind("Test texture", "TilesPerMeter", 1f,
+                new ConfigDescription("How many times the 8x8 checker repeats per meter of the aircraft.",
+                    new AcceptableValueRange<float>(0.05f, 20f)));
+            SupersampledStyle = Config.Bind("Test texture", "SupersampledStyle", false,
+                "Use the game's AlbedoTextureSupersampledWithMipmapBias paint style instead of AlbedoTexture. Try it if the plain style shows a blank or wrong color.");
+
+            Log.LogInfo(PluginName + " v" + Version + " (phase " + Phase + ") loaded | Unity " + Application.unityVersion + " | game " + Application.version);
 
             CompatibilityCheck.Run();
 
             _harmony = new Harmony(PluginGuid);
             SafePatcher.PatchAll(_harmony, typeof(Plugin).Assembly);
 
-            Log.LogInfo("Ready. Open a craft (designer or flight) and press " + DumpKey.Value + " to write the diagnostic dump.");
+            Log.LogInfo("Ready. Open a craft: " + DumpKey.Value + " = diagnostic dump, " + TestKey.Value + " = test texture on/off.");
         }
 
         private void Update()
@@ -60,10 +74,16 @@ namespace SP2TextureMod
                     return;
                 }
 
-                Key key = DumpKey.Value;
-                if (key != Key.None && keyboard[key].wasPressedThisFrame)
+                Key dumpKey = DumpKey.Value;
+                if (dumpKey != Key.None && keyboard[dumpKey].wasPressedThisFrame)
                 {
                     DiagnosticDump.Dump();
+                }
+
+                Key testKey = TestKey.Value;
+                if (testKey != Key.None && keyboard[testKey].wasPressedThisFrame)
+                {
+                    AtlasApplier.ToggleCurrent();
                 }
             }
             catch (Exception ex)

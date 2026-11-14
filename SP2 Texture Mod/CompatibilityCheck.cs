@@ -50,6 +50,10 @@ namespace SP2TextureMod
                 Has(themeScript, "_texturedPartMaterialReferences");
                 Has(themeScript, "_texturedPartMaterials");
                 Has(themeScript, "_defaultPartMaterialInstances");
+                Has(themeScript, "InitializeHighlightMaterial");
+                Has(themeScript, "InitializeHighlightSelectedMaterial");
+                Has(themeScript, "ReleaseDefaultPartMaterialInstance");
+                EnumValue("Assets.Scripts.Craft.CraftLoadContext", "Designer");
 
                 const string themeData = "Assets.Scripts.Craft.ThemeData";
                 Has(themeData, "AllMaterials");
@@ -73,6 +77,9 @@ namespace SP2TextureMod
                 Has(materialScript, "UpdateRenderers");
                 Has(materialScript, "OverrideMaterial");
                 Has(materialScript, "CustomMaterial");
+                Has(materialScript, "RefreshHighlight");
+                Has(materialScript, "OnPaintedInDesigner");
+                TypeExists("Assets.Scripts.Craft.Parts.PartMaterialScript+PaintedEventArgs");
 
                 const string rendererMap = "Assets.Scripts.Craft.Parts.PartMaterialScript+RendererMaterialMap";
                 Has(rendererMap, "Renderer");
@@ -83,6 +90,8 @@ namespace SP2TextureMod
                 Has(rendererMap, "MeshIsUnique");
                 Has(rendererMap, "SubmeshToLevelMap");
                 Has(rendererMap, "SetRendererMaterial");
+                Has(rendererMap, "HighlightMaterials");
+                Has(rendererMap, "SelectedMaterials");
 
                 // --- Mesh combining in flight ---
                 const string groupScript = "Assets.Scripts.Craft.PartGroupScript";
