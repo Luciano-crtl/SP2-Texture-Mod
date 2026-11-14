@@ -7,8 +7,9 @@ namespace SP2TextureMod
 {
     /// <summary>
     /// The user's texture folder: &lt;persistentDataPath&gt;/TextureMod (next to the game's own PaintTextures
-    /// and CraftDecals folders). It holds PNG and JPG images. An image with an OBJ of the same name
-    /// (Ta152.png + Ta152.obj) is applied by transferring the model's UVs; an image alone is tiled.
+    /// and CraftDecals folders). It holds PNG/JPG images and OBJ models. The image and the model are chosen
+    /// separately; an image with an OBJ of the same name (Ta152.png + Ta152.obj) is paired automatically.
+    /// With a model the texture is mapped like the model, without one it is tiled.
     /// </summary>
     internal static class TextureLibrary
     {
@@ -16,36 +17,58 @@ namespace SP2TextureMod
         {
             public string FileName;
             public string FilePath;
-            public string ModelFilePath; // matching .obj, or null
         }
 
-        private static readonly List<Entry> Entries = new List<Entry>();
-        private static int _index;
+        private static readonly List<Entry> Images = new List<Entry>();
+        private static readonly List<Entry> Models = new List<Entry>();
+        private static int _imageIndex;
+        private static int _modelIndex = -1; // -1 = no model (tiled)
 
         public static string Folder
         {
             get { return System.IO.Path.Combine(Application.persistentDataPath, "TextureMod"); }
         }
 
-        public static int Count
+        public static int ImageCount
         {
-            get { return Entries.Count; }
+            get { return Images.Count; }
         }
 
-        public static int Index
+        public static int ImageIndex
         {
-            get { return _index; }
+            get { return _imageIndex; }
         }
 
-        public static Entry Current
+        public static int ModelCount
         {
-            get { return Entries.Count > 0 ? Entries[_index] : null; }
+            get { return Models.Count; }
         }
 
-        /// <summary>Scans the folder (creating it, with a short README, the first time).</summary>
+        public static int ModelIndex
+        {
+            get { return _modelIndex; }
+        }
+
+        public static Entry CurrentImage
+        {
+            get { return Images.Count > 0 ? Images[_imageIndex] : null; }
+        }
+
+        public static string CurrentModelName
+        {
+            get { return _modelIndex >= 0 && _modelIndex < Models.Count ? Models[_modelIndex].FileName : null; }
+        }
+
+        public static string CurrentModelPath
+        {
+            get { return _modelIndex >= 0 && _modelIndex < Models.Count ? Models[_modelIndex].FilePath : null; }
+        }
+
+        /// <summary>Scans the folder (creating it, with a short README, the first time) and restores the saved choice.</summary>
         public static void Refresh()
         {
-            Entries.Clear();
+            Images.Clear();
+            Models.Clear();
             try
             {
                 string folder = Folder;
@@ -60,12 +83,12 @@ namespace SP2TextureMod
                     File.WriteAllText(readme,
                         "SP2 Texture Mod\r\n"
                         + "\r\n"
-                        + "Put PNG or JPG images in this folder.\r\n"
-                        + "- An image alone is tiled over the procedural parts (fuselage, wings...).\r\n"
-                        + "- An image plus an OBJ model with the same name (Ta152.png + Ta152.obj) is mapped like the model:\r\n"
-                        + "  the mod aligns the OBJ to your aircraft and copies its texture coordinates.\r\n"
-                        + "  The OBJ must have UVs (vt lines).\r\n"
-                        + "In the designer: Insert = apply/remove, PageUp/PageDown = choose image, Home/End = tiling.\r\n");
+                        + "Put PNG or JPG images and OBJ models in this folder.\r\n"
+                        + "In the designer open the menu (the three-line button) and choose Textures.\r\n"
+                        + "- An image without a model is tiled over the procedural parts (fuselage, wings...).\r\n"
+                        + "- An image with an OBJ model of the same aircraft is mapped like the model: the mod aligns\r\n"
+                        + "  the OBJ to your craft and copies its texture coordinates. The OBJ must have UVs (vt lines).\r\n"
+                        + "  An image and an OBJ with the same file name are paired automatically.\r\n");
                 }
 
                 string[] files = Directory.GetFiles(folder);
@@ -73,17 +96,17 @@ namespace SP2TextureMod
                 foreach (string file in files)
                 {
                     string extension = System.IO.Path.GetExtension(file).ToLowerInvariant();
-                    if (extension != ".png" && extension != ".jpg" && extension != ".jpeg")
-                    {
-                        continue;
-                    }
-
                     Entry entry = new Entry();
                     entry.FileName = System.IO.Path.GetFileName(file);
                     entry.FilePath = file;
-                    string obj = System.IO.Path.ChangeExtension(file, ".obj");
-                    entry.ModelFilePath = File.Exists(obj) ? obj : null;
-                    Entries.Add(entry);
+                    if (extension == ".png" || extension == ".jpg" || extension == ".jpeg")
+                    {
+                        Images.Add(entry);
+                    }
+                    else if (extension == ".obj")
+                    {
+                        Models.Add(entry);
+                    }
                 }
             }
             catch (Exception ex)
@@ -91,28 +114,95 @@ namespace SP2TextureMod
                 Plugin.Log.LogWarning("[TEX] could not scan the texture folder: " + ex.Message);
             }
 
-            _index = 0;
-            string wanted = Plugin.SelectedTexture.Value;
-            for (int i = 0; i < Entries.Count; i++)
+            _imageIndex = 0;
+            string wantedImage = Plugin.SelectedTexture.Value;
+            for (int i = 0; i < Images.Count; i++)
             {
-                if (string.Equals(Entries[i].FileName, wanted, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Images[i].FileName, wantedImage, StringComparison.OrdinalIgnoreCase))
                 {
-                    _index = i;
+                    _imageIndex = i;
                     break;
+                }
+            }
+
+            // "auto" = pair with the same-named model if there is one; "none" = tiled; otherwise a file name.
+            _modelIndex = -1;
+            string wantedModel = Plugin.SelectedModel.Value;
+            if (string.Equals(wantedModel, "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                AutoPair(false);
+            }
+            else
+            {
+                for (int i = 0; i < Models.Count; i++)
+                {
+                    if (string.Equals(Models[i].FileName, wantedModel, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _modelIndex = i;
+                        break;
+                    }
                 }
             }
         }
 
-        /// <summary>Moves the selection (wrapping around) and remembers it in the settings.</summary>
-        public static void Step(int delta)
+        /// <summary>Selects the next or previous image (wrapping around); pairs it with a same-named model if any.</summary>
+        public static void StepImage(int delta)
         {
-            if (Entries.Count == 0)
+            if (Images.Count == 0)
             {
                 return;
             }
 
-            _index = ((_index + delta) % Entries.Count + Entries.Count) % Entries.Count;
-            Plugin.SelectedTexture.Value = Entries[_index].FileName;
+            _imageIndex = ((_imageIndex + delta) % Images.Count + Images.Count) % Images.Count;
+            Plugin.SelectedTexture.Value = Images[_imageIndex].FileName;
+            AutoPair(true);
+        }
+
+        /// <summary>Selects the next or previous model, including "none" (tiled).</summary>
+        public static void StepModel(int delta)
+        {
+            int positions = Models.Count + 1;
+            int position = ((_modelIndex + 1 + delta) % positions + positions) % positions;
+            _modelIndex = position - 1;
+            Plugin.SelectedModel.Value = _modelIndex >= 0 ? Models[_modelIndex].FileName : "none";
+        }
+
+        // Selects the model with the same base name as the current image, if there is one.
+        private static void AutoPair(bool save)
+        {
+            Entry image = CurrentImage;
+            if (image == null)
+            {
+                return;
+            }
+
+            string baseName = System.IO.Path.GetFileNameWithoutExtension(image.FileName);
+            for (int i = 0; i < Models.Count; i++)
+            {
+                if (string.Equals(System.IO.Path.GetFileNameWithoutExtension(Models[i].FileName), baseName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _modelIndex = i;
+                    if (save)
+                    {
+                        Plugin.SelectedModel.Value = Models[i].FileName;
+                    }
+
+                    return;
+                }
+            }
+        }
+
+        /// <summary>Opens the folder in the system's file browser.</summary>
+        public static void OpenFolder()
+        {
+            try
+            {
+                Application.OpenURL("file:///" + Folder.Replace('\\', '/'));
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[TEX] could not open the folder: " + ex.Message);
+            }
         }
 
         /// <summary>Reads the image into a new texture (mipmapped, sRGB). Returns null if it cannot be read.</summary>

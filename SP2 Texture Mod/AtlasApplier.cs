@@ -64,6 +64,13 @@ namespace SP2TextureMod
         private static readonly UvTransfer.Stats Stats = new UvTransfer.Stats();
         private static int _verifyFrame = -1;
 
+        // The automatic alignment is kept while the aircraft, the model and the mirror setting stay the same,
+        // so moving an adjustment slider is fast.
+        private static ModelAlignment _fitCache;
+        private static AircraftScript _fitAircraft;
+        private static string _fitModelPath;
+        private static bool _fitFlip;
+
         // The parsed OBJ is kept between applications (parsing a large model takes a moment).
         private static string _cachePath;
         private static DateTime _cacheStamp;
@@ -100,8 +107,8 @@ namespace SP2TextureMod
             }
         }
 
-        /// <summary>Hotkey: applies the selected image to the current aircraft, or removes it if already applied.</summary>
-        public static void ToggleCurrent()
+        /// <summary>Applies the selected image (and model) to the aircraft open in the designer; applies again if already applied.</summary>
+        public static void ApplyCurrent()
         {
             string context;
             AircraftScript aircraft = DiagnosticDump.FindAircraft(out context);
@@ -114,12 +121,32 @@ namespace SP2TextureMod
             Prune();
             if (Parts.Count > 0)
             {
-                RevertAll();
+                ReapplyIfActive();
             }
             else
             {
                 ApplyAll(aircraft, context);
             }
+        }
+
+        /// <summary>Removes the texture from the aircraft and restores its normal paint.</summary>
+        public static void RemoveCurrent()
+        {
+            Prune();
+            if (Parts.Count > 0)
+            {
+                RevertAll();
+            }
+            else
+            {
+                StatusText = "Nothing to remove.";
+            }
+        }
+
+        /// <summary>Forgets the automatic alignment so the next apply finds it again (after the craft changed a lot).</summary>
+        public static void InvalidateFit()
+        {
+            _fitCache = null;
         }
 
         /// <summary>After changing the image or the tiling: applies again with the new choice, if currently applied.</summary>
@@ -195,25 +222,23 @@ namespace SP2TextureMod
                 return;
             }
 
-            // Pick up anything the user edited in the .cfg while the game was running.
-            Plugin.Instance.ReloadConfig();
-
             if (aircraft.LoadContext != CraftLoadContext.Designer)
             {
                 Plugin.Log.LogWarning(Tag + "context is " + context + ", not the designer: in flight the game merges most part meshes at load, "
                     + "so only parts that are never merged (wings, flaps) are expected to show the texture. Results here are not representative.");
             }
 
-            TextureLibrary.Entry entry = TextureLibrary.Current;
+            TextureLibrary.Entry entry = TextureLibrary.CurrentImage;
             if (!LoadImage(entry))
             {
                 return;
             }
 
             bool transfer = false;
-            if (entry != null && entry.ModelFilePath != null)
+            string modelPath = TextureLibrary.CurrentModelPath;
+            if (modelPath != null)
             {
-                transfer = PrepareModel(entry.ModelFilePath);
+                transfer = PrepareModel(modelPath);
             }
 
             _texture.wrapMode = transfer ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
@@ -445,16 +470,21 @@ namespace SP2TextureMod
                 bounds.SetMinMax(min, max);
 
                 System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-                ModelAlignment auto = ModelAlignment.Fit(_model, _bvh, samples, bounds);
+                bool reused = _fitCache != null && _fitAircraft == aircraft && _fitModelPath == _cachePath && _fitFlip == _cacheFlip;
+                ModelAlignment auto = reused ? _fitCache : ModelAlignment.Fit(_model, _bvh, samples, bounds);
+                _fitCache = auto;
+                _fitAircraft = aircraft;
+                _fitModelPath = _cachePath;
+                _fitFlip = _cacheFlip;
                 _alignment = auto.WithAdjustment(
                     bounds.center,
                     new Vector3(Plugin.AdjustOffsetX.Value, Plugin.AdjustOffsetY.Value, Plugin.AdjustOffsetZ.Value),
                     new Vector3(Plugin.AdjustRotationX.Value, Plugin.AdjustRotationY.Value, Plugin.AdjustRotationZ.Value),
                     Plugin.AdjustScale.Value);
 
-                summary = "Alignment: " + auto.Summary;
+                summary = (reused ? "Alignment (kept): " : "Alignment: ") + auto.Summary;
                 Plugin.Log.LogInfo(Tag + "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z)
-                    + ") | alignment found in " + watch.ElapsedMilliseconds + " ms: " + auto.Summary);
+                    + ") | alignment " + (reused ? "kept from before" : "found in " + watch.ElapsedMilliseconds + " ms") + ": " + auto.Summary);
                 if (auto.MeanDistance > 0.08f * Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)))
                 {
                     Plugin.Log.LogWarning(Tag + "the model does not fit the craft well (mean distance is large). "

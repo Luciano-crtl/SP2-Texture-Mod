@@ -125,6 +125,16 @@ namespace SP2TextureMod
                 Has("Assets.Scripts.Design.Designer", "Aircraft");
                 Has("Assets.Scripts.Design.Designer", "SelectedPart");
                 Has("Assets.Scripts.Design.Designer", "CreateUndoStepForSelectedPart");
+
+                // --- The Textures panel and its button in the designer's main menu ---
+                Has("Assets.Scripts.Design.UI.DesignerPanelScript", "InitializeDesignerPanel");
+                TypeExists("Assets.Scripts.Design.UI.FileMenuPanelScript");
+                Has("Assets.Scripts.UI.UserInterface", "CreateDialog");
+                TypeExists("Assets.Scripts.UI.PanelDialogScript");
+                TypeExists("Assets.Scripts.UI.HeaderScript");
+                TypeExists("Assets.Scripts.UI.Controls.SliderControl");
+                TypeExists("Assets.Scripts.UI.Controls.ToggleControl");
+                TypeExists("Assets.Scripts.UI.Controls.TextControl");
             }
             catch (Exception ex)
             {
