@@ -25,7 +25,7 @@ namespace SP2TextureMod
         public const string Version = "0.1.0";
 
         // Which development phase this build contains (the version is only bumped when a whole set is done).
-        public const string Phase = "3c";
+        public const string Phase = "3d";
 
         internal static Plugin Instance;
         internal static ManualLogSource Log;
@@ -37,6 +37,19 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedModel;
         internal static ConfigEntry<float> TilesPerMeter;
         internal static ConfigEntry<bool> FlipModelX;
+        internal static ConfigEntry<string> SelectedNormal;
+        internal static ConfigEntry<string> SelectedOcclusion;
+        internal static ConfigEntry<string> SelectedHeight;
+        internal static ConfigEntry<float> NormalStrength;
+        internal static ConfigEntry<bool> FlipNormalGreen;
+        internal static ConfigEntry<bool> RebuildNormalZ;
+        internal static ConfigEntry<bool> HeightToNormal;
+        internal static ConfigEntry<float> BumpStrength;
+        internal static ConfigEntry<float> OcclusionStrength;
+        internal static ConfigEntry<bool> UseParallax;
+        internal static ConfigEntry<float> ParallaxHeight;
+        internal static ConfigEntry<float> Metallic;
+        internal static ConfigEntry<float> Smoothness;
         internal static ConfigEntry<bool> ProjectAlongNormals;
         internal static ConfigEntry<float> RayStart;
         internal static ConfigEntry<float> FacingWeight;
@@ -71,6 +84,33 @@ namespace SP2TextureMod
 
             FlipModelX = Config.Bind("Model", "FlipModelX", true,
                 "Mirror the OBJ on X when reading it, like most importers into Unity do. If the left and right sides of the texture come out swapped, set this to false.");
+            SelectedNormal = Config.Bind("Maps", "SelectedNormal", "auto",
+                "File name of the normal map; 'auto' = the one named like the albedo image with _n, _nrm, _normal... instead of _a; 'none' = no normal map (set by the panel).");
+            SelectedOcclusion = Config.Bind("Maps", "SelectedOcclusion", "auto",
+                "File name of the occlusion map; 'auto' = the one named like the albedo image with _ao, _occ, _occlusion...; 'none' = none (set by the panel).");
+            SelectedHeight = Config.Bind("Maps", "SelectedHeight", "auto",
+                "File name of the height (bump) map; 'auto' = the one named like the albedo image with _h, _height, _bump...; 'none' = none (set by the panel).");
+            NormalStrength = Config.Bind("Maps", "NormalStrength", 1f,
+                new ConfigDescription("How strong the normal map is (the shader's bump scale).", new AcceptableValueRange<float>(0f, 3f)));
+            FlipNormalGreen = Config.Bind("Maps", "FlipNormalGreen", false,
+                "Flip the green channel of the normal map. DirectX-style maps (many game textures) need it; if the relief looks inverted (bumps look like dents), turn it on.");
+            RebuildNormalZ = Config.Bind("Maps", "RebuildNormalZ", true,
+                "Rebuild the blue channel of the normal map from red and green. Many game textures keep other data in blue.");
+            HeightToNormal = Config.Bind("Maps", "HeightToNormal", false,
+                "With no normal map, make one from the height (bump) map.");
+            BumpStrength = Config.Bind("Maps", "BumpStrength", 3f,
+                new ConfigDescription("Strength used when a bump (height) image is converted to a normal map.", new AcceptableValueRange<float>(0.1f, 20f)));
+            OcclusionStrength = Config.Bind("Maps", "OcclusionStrength", 1f,
+                new ConfigDescription("How strong the occlusion map is.", new AcceptableValueRange<float>(0f, 1f)));
+            UseParallax = Config.Bind("Maps", "UseParallax", false,
+                "Use the height map for the parallax effect (the surface seems to have depth). Experimental: it can distort the texture.");
+            ParallaxHeight = Config.Bind("Maps", "ParallaxHeight", 0.02f,
+                new ConfigDescription("Depth of the parallax effect.", new AcceptableValueRange<float>(0.005f, 0.08f)));
+            Metallic = Config.Bind("Material", "Metallic", 0f,
+                new ConfigDescription("Metallic of the textured parts, one value for all of it (the part shader has no metallic map).", new AcceptableValueRange<float>(0f, 1f)));
+            Smoothness = Config.Bind("Material", "Smoothness", 0f,
+                new ConfigDescription("Smoothness of the textured parts, one value for all of it (the part shader has no smoothness map).", new AcceptableValueRange<float>(0f, 1f)));
+
             ProjectAlongNormals = Config.Bind("Model", "ProjectAlongNormals", true,
                 "On: each point of the craft is matched to the first model surface met by a ray going inwards along its normal (the way textures are baked from a detailed model). Off: the closest model surface.");
             RayStart = Config.Bind("Model", "RayStart", 0.3f,

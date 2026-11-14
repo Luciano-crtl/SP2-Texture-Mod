@@ -32,6 +32,7 @@ namespace SP2TextureMod
             public Material[] OriginalHighlight;
             public Material[] OriginalSelected;
             public bool OriginalExcludeFromCombine;
+            public bool WroteTangents;
         }
 
         private sealed class PartState
@@ -54,9 +55,19 @@ namespace SP2TextureMod
 
         private static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
         private static readonly int SupersampleBiasId = Shader.PropertyToID("_SupersampleMipmapBias");
+        private static readonly int BumpMapId = Shader.PropertyToID("_BumpMap");
+        private static readonly int BumpScaleId = Shader.PropertyToID("_BumpScale");
+        private static readonly int OcclusionMapId = Shader.PropertyToID("_OcclusionMap");
+        private static readonly int OcclusionStrengthId = Shader.PropertyToID("_OcclusionStrength");
+        private static readonly int ParallaxMapId = Shader.PropertyToID("_ParallaxMap");
+        private static readonly int ParallaxId = Shader.PropertyToID("_Parallax");
+        private static readonly int MaterialDataId = Shader.PropertyToID("_MaterialData");
 
         // State of the current application.
         private static Texture2D _texture;
+        private static Texture2D _normalMap;
+        private static Texture2D _occlusionMap;
+        private static Texture2D _heightMap;
         private static AircraftScript _activeAircraft;
         private static ObjModel _model;
         private static TriangleBvh _bvh;
@@ -285,6 +296,8 @@ namespace SP2TextureMod
                 return;
             }
 
+            LoadMaps();
+
             bool transfer = false;
             string modelPath = TextureLibrary.CurrentModelPath;
             if (modelPath != null)
@@ -420,6 +433,7 @@ namespace SP2TextureMod
             StatusText = "Applied to " + renderers + " renderers in " + watch.ElapsedMilliseconds + " ms";
             StatusRows.Clear();
             StatusAdd("Mode", transfer ? "model UV transfer" : "tiled, " + F(Plugin.TilesPerMeter.Value) + " per meter");
+            StatusAdd("Maps", MapsSummary());
             if (transfer)
             {
                 StatusAdd("Model", _model.Name);
@@ -760,6 +774,15 @@ namespace SP2TextureMod
                     return false;
                 }
 
+                // A normal map (and the parallax effect) needs the tangent of every vertex, which these meshes do not
+                // have: they are worked out from the normals and the texture coordinates just written.
+                bool tangents = false;
+                if (_normalMap != null || _heightMap != null)
+                {
+                    mesh.RecalculateTangents();
+                    tangents = true;
+                }
+
                 // Remember the originals only the first time this exact map is touched.
                 RendererState rs;
                 if (!state.Renderers.TryGetValue(map.Renderer, out rs) || rs.Map != map)
@@ -773,6 +796,11 @@ namespace SP2TextureMod
                         OriginalExcludeFromCombine = map.ExcludeFromMeshCombine
                     };
                     state.Renderers[map.Renderer] = rs;
+                }
+
+                if (tangents)
+                {
+                    rs.WroteTangents = true;
                 }
 
                 int count = map.OriginalMaterials.Length;
@@ -819,9 +847,200 @@ namespace SP2TextureMod
             material.name = "SP2TextureMod Atlas";
             material.SetTexture(BaseMapId, _texture);
             material.SetFloat(SupersampleBiasId, -1f);
+            ConfigureMaterial(material, theme);
 
             AtlasMaterials[theme] = material;
             return material;
+        }
+
+        // ------------------------------------------------------------------ maps and material values
+
+        // Loads the normal, occlusion and height maps chosen in the panel (any of them may be missing).
+        private static void LoadMaps()
+        {
+            ReleaseMaps();
+
+            TextureLibrary.Entry normal = TextureLibrary.Normal.Current;
+            TextureLibrary.Entry occlusion = TextureLibrary.Occlusion.Current;
+            TextureLibrary.Entry height = TextureLibrary.Height.Current;
+            string note;
+
+            try
+            {
+                if (normal != null)
+                {
+                    _normalMap = MapTextures.LoadNormal(normal.FilePath, Plugin.FlipNormalGreen.Value, Plugin.RebuildNormalZ.Value,
+                        Plugin.BumpStrength.Value, out note);
+                    LogMap("normal map", normal.FileName, _normalMap, note);
+                }
+                else if (Plugin.HeightToNormal.Value && height != null)
+                {
+                    _normalMap = MapTextures.LoadNormalFromHeight(height.FilePath, Plugin.BumpStrength.Value, out note);
+                    LogMap("normal map from the height map", height.FileName, _normalMap, note);
+                }
+
+                if (occlusion != null)
+                {
+                    _occlusionMap = MapTextures.LoadOcclusion(occlusion.FilePath, out note);
+                    LogMap("occlusion map", occlusion.FileName, _occlusionMap, note);
+                }
+
+                if (Plugin.UseParallax.Value && height != null)
+                {
+                    _heightMap = MapTextures.LoadHeight(height.FilePath, out note);
+                    LogMap("height map (parallax)", height.FileName, _heightMap, note);
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(Tag + "could not load a map: " + ex.Message);
+            }
+        }
+
+        private static void LogMap(string what, string file, Texture2D texture, string note)
+        {
+            if (texture == null)
+            {
+                Plugin.Log.LogWarning(Tag + what + " '" + file + "' not used: " + note);
+            }
+            else
+            {
+                Plugin.Log.LogInfo(Tag + what + " '" + file + "': " + texture.width + "x" + texture.height + ", " + note);
+            }
+        }
+
+        private static void ReleaseMaps()
+        {
+            if (_normalMap != null)
+            {
+                UnityEngine.Object.Destroy(_normalMap);
+            }
+
+            if (_occlusionMap != null)
+            {
+                UnityEngine.Object.Destroy(_occlusionMap);
+            }
+
+            if (_heightMap != null)
+            {
+                UnityEngine.Object.Destroy(_heightMap);
+            }
+
+            _normalMap = null;
+            _occlusionMap = null;
+            _heightMap = null;
+        }
+
+        private static string MapsSummary()
+        {
+            string text = "";
+            if (_normalMap != null) text += "normal";
+            if (_occlusionMap != null) text += (text.Length > 0 ? ", " : "") + "occlusion";
+            if (_heightMap != null) text += (text.Length > 0 ? ", " : "") + "height";
+            return text.Length > 0 ? text : "none";
+        }
+
+        // The shader's own switches for each map: the keyword makes it read the texture, the strength sets how much.
+        private static void ConfigureMaterial(Material material, ThemeScript theme)
+        {
+            SetMap(material, "_NORMALMAP", BumpMapId, _normalMap);
+            if (_normalMap != null)
+            {
+                material.SetFloat(BumpScaleId, Plugin.NormalStrength.Value);
+            }
+
+            SetMap(material, "_OCCLUSIONMAP", OcclusionMapId, _occlusionMap);
+            if (_occlusionMap != null)
+            {
+                material.SetFloat(OcclusionStrengthId, Plugin.OcclusionStrength.Value);
+            }
+
+            SetMap(material, "_PARALLAXMAP", ParallaxMapId, _heightMap);
+            if (_heightMap != null)
+            {
+                material.SetFloat(ParallaxId, Plugin.ParallaxHeight.Value);
+            }
+
+            ApplyConstants(material, theme);
+        }
+
+        private static void SetMap(Material material, string keyword, int propertyId, Texture2D texture)
+        {
+            if (texture != null)
+            {
+                material.SetTexture(propertyId, texture);
+                material.EnableKeyword(keyword);
+            }
+            else
+            {
+                material.SetTexture(propertyId, null);
+                material.DisableKeyword(keyword);
+            }
+        }
+
+        // Metallic and smoothness have no map in the part shader: they come from the paint material's entry in
+        // _MaterialData (metallic, smoothness, emission day, emission night). The reserved albedo entry of this
+        // material instance gets the values chosen in the panel; the craft's own theme is not touched.
+        private static void ApplyConstants(Material material, ThemeScript theme)
+        {
+            int index = AlbedoShaderIndex(theme) * 10 + 3;
+            Vector4[] data = material.GetVectorArray(MaterialDataId);
+            if (data == null || data.Length <= index)
+            {
+                return;
+            }
+
+            Vector4 values = data[index];
+            values.x = Plugin.Metallic.Value;
+            values.y = Plugin.Smoothness.Value;
+            data[index] = values;
+            material.SetVectorArray(MaterialDataId, data);
+        }
+
+        /// <summary>Applies the strength, metallic and smoothness settings to the material that is already in use.</summary>
+        public static void RefreshMaterial()
+        {
+            foreach (KeyValuePair<ThemeScript, Material> pair in AtlasMaterials)
+            {
+                if (pair.Value == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ConfigureMaterial(pair.Value, pair.Key);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogWarning(Tag + "could not refresh the material: " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The theme rewrites _MaterialData of every material it keeps whenever the paint changes; this puts
+        /// the metallic and smoothness chosen in the panel back on ours.
+        /// </summary>
+        public static void OnThemeMaterialUpdated(ThemeScript theme, Material material)
+        {
+            if (AtlasMaterials.Count == 0)
+            {
+                return;
+            }
+
+            Material atlas;
+            if (AtlasMaterials.TryGetValue(theme, out atlas) && atlas == material)
+            {
+                try
+                {
+                    ApplyConstants(atlas, theme);
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogWarning(Tag + "could not keep the metallic and smoothness: " + ex.Message);
+                }
+            }
         }
 
         private static int AlbedoShaderIndex(ThemeScript theme)
@@ -907,6 +1126,10 @@ namespace SP2TextureMod
                             if (mesh != null && mesh.vertexCount > 0)
                             {
                                 UvProjection.ClearUv0(mesh);
+                                if (rs.WroteTangents)
+                                {
+                                    mesh.tangents = null; // takes the tangent channel out again
+                                }
                             }
 
                             renderers++;
@@ -961,6 +1184,8 @@ namespace SP2TextureMod
                 UnityEngine.Object.Destroy(_texture);
                 _texture = null;
             }
+
+            ReleaseMaps();
         }
 
         // Forget parts and materials that were destroyed with their aircraft (left the designer, loaded another craft).
@@ -1029,6 +1254,10 @@ namespace SP2TextureMod
                 return;
             }
 
+            Plugin.Log.LogInfo(Tag + "verify: maps | normal " + (atlas.GetTexture(BumpMapId) != null) + " (_NORMALMAP " + atlas.IsKeywordEnabled("_NORMALMAP")
+                + "), occlusion " + (atlas.GetTexture(OcclusionMapId) != null) + " (_OCCLUSIONMAP " + atlas.IsKeywordEnabled("_OCCLUSIONMAP")
+                + "), height " + (atlas.GetTexture(ParallaxMapId) != null) + " (_PARALLAXMAP " + atlas.IsKeywordEnabled("_PARALLAXMAP")
+                + ") | metallic " + F(Plugin.Metallic.Value) + ", smoothness " + F(Plugin.Smoothness.Value));
             Texture bound = atlas.GetTexture(BaseMapId);
             Plugin.Log.LogInfo(Tag + "verify: material '" + atlas.name + "' shader='" + atlas.shader.name + "' baseMap="
                 + (bound != null ? bound.name + " " + bound.width + "x" + bound.height : "NULL"));

@@ -57,6 +57,8 @@ namespace SP2TextureMod.UI
                 BuildFiles();
                 BuildApply();
                 BuildTiling();
+                BuildMaps();
+                BuildMaterial();
                 BuildAlignment();
                 BuildTools();
             }
@@ -142,6 +144,86 @@ namespace SP2TextureMod.UI
             FloatSetting(Plugin.TilesPerMeter, "Repetitions per meter",
                 "How many times the image repeats per meter of the craft. Only used when no model is selected.",
                 0.05f, 0.05f, 20f, "", AtlasApplier.ReapplyIfActive);
+        }
+
+        private void BuildMaps()
+        {
+            builder.Header("Maps (normal, occlusion, height)", collapsed: true);
+            builder.Text("Note", "The part shader reads a normal, an occlusion and a height map. They are found by name next to the albedo image (_n, _ao, _h or _bump) or chosen here.");
+            MapRows(TextureLibrary.Normal);
+            MapRows(TextureLibrary.Occlusion);
+            MapRows(TextureLibrary.Height);
+
+            FloatSetting(Plugin.NormalStrength, "Normal strength", "How strong the relief of the normal map is.",
+                0.05f, 0f, 3f, "x", null, AtlasApplier.RefreshMaterial);
+            builder.Toggle("Flip normal green",
+                "DirectX-style normal maps (many game textures) need the green channel flipped. Turn it on if the relief looks inverted (bumps look like dents).",
+                Plugin.FlipNormalGreen.Value,
+                on =>
+                {
+                    SetValue(Plugin.FlipNormalGreen, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            builder.Toggle("Rebuild normal blue",
+                "Works the blue channel of the normal map out from red and green. Leave it on: many game textures keep other data in blue.",
+                Plugin.RebuildNormalZ.Value,
+                on =>
+                {
+                    SetValue(Plugin.RebuildNormalZ, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            builder.Toggle("Normal map from height map",
+                "With no normal map selected, makes one from the height (bump) map. A grayscale image chosen as the normal map is converted the same way.",
+                Plugin.HeightToNormal.Value,
+                on =>
+                {
+                    SetValue(Plugin.HeightToNormal, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            FloatSetting(Plugin.BumpStrength, "Bump strength", "Strength used when a height (bump) image is converted to a normal map.",
+                0.1f, 0.1f, 20f, "", AtlasApplier.ReapplyIfActive);
+            FloatSetting(Plugin.OcclusionStrength, "Occlusion strength", "How dark the occlusion map makes the creases.",
+                0.05f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+            builder.Toggle("Parallax (height map)",
+                "Uses the height map to give the surface depth. Experimental: it can distort the texture.",
+                Plugin.UseParallax.Value,
+                on =>
+                {
+                    SetValue(Plugin.UseParallax, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            FloatSetting(Plugin.ParallaxHeight, "Parallax depth", "Depth of the parallax effect.",
+                0.005f, 0.005f, 0.08f, "", null, AtlasApplier.RefreshMaterial);
+        }
+
+        private void BuildMaterial()
+        {
+            builder.Header("Material (metallic, smoothness)", collapsed: true);
+            builder.Text("Note", "One value for all of the textured parts: the part shader has no metallic or smoothness map.");
+            FloatSetting(Plugin.Metallic, "Metallic", "How metallic the textured parts look.",
+                0.01f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+            FloatSetting(Plugin.Smoothness, "Smoothness", "How glossy the textured parts look.",
+                0.01f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+        }
+
+        private void MapRows(TextureLibrary.MapSlot slot)
+        {
+            Live(slot.Label, () => slot.CurrentName ?? "none");
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Previous", () => ChangeMap(slot, -1)),
+                new KeyValuePair<string, Action>("Next", () => ChangeMap(slot, 1)),
+            });
+        }
+
+        private static void ChangeMap(TextureLibrary.MapSlot slot, int delta)
+        {
+            TextureLibrary.StepMap(slot, delta);
+            AtlasApplier.ReapplyIfActive();
         }
 
         private void BuildAlignment()
@@ -246,8 +328,9 @@ namespace SP2TextureMod.UI
             });
         }
 
+        // afterRelease runs when the slider is let go; whileDragging runs on every step (for cheap changes).
         private void FloatSetting(ConfigEntry<float> entry, string label, string tooltip,
-                                  float step, float min, float max, string unit, Action afterRelease)
+                                  float step, float min, float max, string unit, Action afterRelease, Action whileDragging = null)
         {
             int positions = Mathf.RoundToInt((max - min) / step) + 1;
             string format = NumberFormat(step);
@@ -255,7 +338,11 @@ namespace SP2TextureMod.UI
             builder.Slider(label, tooltip, min, max, positions <= 1000 ? positions : 0,
                 Mathf.Clamp(entry.Value, min, max),
                 x => x.ToString(format, CultureInfo.InvariantCulture) + unit,
-                x => SetValue(entry, Mathf.Clamp(Mathf.Round(x / step) * step, min, max)),
+                x =>
+                {
+                    SetValue(entry, Mathf.Clamp(Mathf.Round(x / step) * step, min, max));
+                    if (whileDragging != null) whileDragging();
+                },
                 x =>
                 {
                     SaveConfig();

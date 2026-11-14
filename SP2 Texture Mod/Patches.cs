@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using Assets.Scripts.Craft;
 using Assets.Scripts.Craft.MeshGen;
 using HarmonyLib;
+using UnityEngine;
 
 namespace SP2TextureMod
 {
@@ -34,6 +36,26 @@ namespace SP2TextureMod
             catch (Exception ex)
             {
                 Plugin.Log.LogWarning("[PATCH] ProceduralMeshPatch postfix failed: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The theme writes _MaterialData into every material it keeps each time the paint changes (the one-argument
+    /// overload is the one that does it per material). The atlas material gets its metallic and smoothness back.
+    /// </summary>
+    [HarmonyPatch(typeof(ThemeScript), "UpdateMaterialProperties", new Type[] { typeof(Material) })]
+    internal static class ThemeMaterialPatch
+    {
+        private static void Postfix(ThemeScript __instance, Material material)
+        {
+            try
+            {
+                AtlasApplier.OnThemeMaterialUpdated(__instance, material);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[PATCH] ThemeMaterialPatch postfix failed: " + ex.Message);
             }
         }
     }

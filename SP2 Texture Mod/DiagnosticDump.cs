@@ -208,6 +208,15 @@ namespace SP2TextureMod
 
             try
             {
+                Plugin.Log.LogInfo(Tag + "  all keywords of the shader: " + string.Join(" ", shader.keywordSpace.keywordNames));
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogDebug(Tag + "  could not list the shader's keywords: " + ex.Message);
+            }
+
+            try
+            {
                 LocalKeyword[] keywords = material.enabledKeywords;
                 StringBuilder kb = new StringBuilder();
                 for (int i = 0; i < keywords.Length; i++)
