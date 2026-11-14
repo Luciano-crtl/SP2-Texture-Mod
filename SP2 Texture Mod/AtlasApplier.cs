@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Assets.Scripts.Craft;
 using Assets.Scripts.Craft.Paint;
 using Assets.Scripts.Craft.Parts;
@@ -9,17 +10,20 @@ using UnityEngine;
 namespace SP2TextureMod
 {
     /// <summary>
-    /// Phase 2: puts one texture on the procedural parts (fuselage, wings...) of the current aircraft,
-    /// reversibly, to prove the whole path before the real atlas is used:
-    ///   1. write UV0 (procedural meshes have none),
-    ///   2. point UV1.x at the game's reserved "AlbedoTexture" paint style,
-    ///   3. give the renderers a clone of the part material whose _BaseMap is the texture.
-    /// Nothing is saved in the craft file: MaterialIds are never touched.
-    /// The same key reverts everything.
+    /// Puts the user's texture on the procedural parts (fuselage, wings...) of the current aircraft,
+    /// reversibly:
+    ///   1. write UV0 (procedural meshes have none): either by transferring the UVs of a War Thunder OBJ
+    ///      model aligned to the craft, or, with an image alone, by a box projection (tiling);
+    ///   2. point UV1.x at the game's reserved albedo paint style (the one used by gauge faces);
+    ///   3. give the renderers a clone of the part material whose _BaseMap is the image.
+    /// Nothing is saved in the craft file: MaterialIds are never touched. The same key reverts everything.
     /// </summary>
     internal static class AtlasApplier
     {
-        private const string Tag = "[TEST] ";
+        private const string Tag = "[TEX] ";
+
+        // The textured style the game itself uses (gauge faces). The plain AlbedoTexture style is not drawn by the shader.
+        private const PaintStyle Style = PaintStyle.AlbedoTextureSupersampledWithMipmapBias;
 
         private sealed class RendererState
         {
@@ -38,20 +42,42 @@ namespace SP2TextureMod
             public readonly Dictionary<Renderer, RendererState> Renderers = new Dictionary<Renderer, RendererState>();
         }
 
+        private sealed class Candidate
+        {
+            public PartScript Part;
+            public PartMaterialScript Materials;
+            public PartMaterialScript.RendererMaterialMap Map;
+        }
+
         private static readonly Dictionary<PartScript, PartState> Parts = new Dictionary<PartScript, PartState>();
         private static readonly Dictionary<ThemeScript, Material> AtlasMaterials = new Dictionary<ThemeScript, Material>();
 
         private static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
         private static readonly int SupersampleBiasId = Shader.PropertyToID("_SupersampleMipmapBias");
 
+        // State of the current application.
         private static Texture2D _texture;
         private static AircraftScript _activeAircraft;
+        private static ObjModel _model;
+        private static TriangleBvh _bvh;
+        private static ModelAlignment _alignment;
+        private static readonly UvTransfer.Stats Stats = new UvTransfer.Stats();
         private static int _verifyFrame = -1;
 
-        // The style in use. The first press uses the one the game itself uses for gauge faces
-        // (supersampled, style 4); the second press tries the plain one (style 3); the third reverts.
-        private static PaintStyle _style = PaintStyle.AlbedoTextureSupersampledWithMipmapBias;
-        private static int _cycle;
+        // The parsed OBJ is kept between applications (parsing a large model takes a moment).
+        private static string _cachePath;
+        private static DateTime _cacheStamp;
+        private static bool _cacheFlip;
+        private static ObjModel _cacheModel;
+        private static TriangleBvh _cacheBvh;
+
+        /// <summary>One-line result shown on screen and in the log.</summary>
+        public static string StatusText = "";
+
+        public static bool IsActive
+        {
+            get { return Parts.Count > 0; }
+        }
 
         // ------------------------------------------------------------------ entry points
 
@@ -74,39 +100,41 @@ namespace SP2TextureMod
             }
         }
 
-        /// <summary>Hotkey: applies the test texture to the current aircraft, or reverts it if already applied.</summary>
+        /// <summary>Hotkey: applies the selected image to the current aircraft, or removes it if already applied.</summary>
         public static void ToggleCurrent()
         {
             string context;
             AircraftScript aircraft = DiagnosticDump.FindAircraft(out context);
             if (aircraft == null)
             {
-                Plugin.Log.LogWarning(Tag + "no aircraft found. Open a craft in the designer first.");
+                Fail("No aircraft found. Open a craft in the designer first.");
                 return;
             }
 
             Prune();
-            if (Parts.Count == 0)
-            {
-                _cycle = 0;
-            }
-
-            if (_cycle == 0)
-            {
-                ApplyAll(aircraft, context, PaintStyle.AlbedoTextureSupersampledWithMipmapBias);
-                _cycle = Parts.Count > 0 ? 1 : 0;
-            }
-            else if (_cycle == 1)
+            if (Parts.Count > 0)
             {
                 RevertAll();
-                ApplyAll(aircraft, context, PaintStyle.AlbedoTexture);
-                _cycle = Parts.Count > 0 ? 2 : 0;
             }
             else
             {
-                RevertAll();
-                _cycle = 0;
+                ApplyAll(aircraft, context);
             }
+        }
+
+        /// <summary>After changing the image or the tiling: applies again with the new choice, if currently applied.</summary>
+        public static void ReapplyIfActive()
+        {
+            Prune();
+            if (Parts.Count == 0 || _activeAircraft == null)
+            {
+                return;
+            }
+
+            AircraftScript aircraft = _activeAircraft;
+            string context = aircraft.LoadContext.ToString();
+            RevertAll();
+            ApplyAll(aircraft, context);
         }
 
         /// <summary>
@@ -156,17 +184,19 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ apply
 
-        private static void ApplyAll(AircraftScript aircraft, string context, PaintStyle style)
+        private static void ApplyAll(AircraftScript aircraft, string context)
         {
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-            _style = style;
 
             ThemeScript theme = aircraft.Theme;
             if (theme == null || theme.Theme == null || theme.Material == null)
             {
-                Plugin.Log.LogWarning(Tag + "aircraft has no usable theme");
+                Fail("The aircraft has no usable theme.");
                 return;
             }
+
+            // Pick up anything the user edited in the .cfg while the game was running.
+            Plugin.Instance.ReloadConfig();
 
             if (aircraft.LoadContext != CraftLoadContext.Designer)
             {
@@ -174,18 +204,30 @@ namespace SP2TextureMod
                     + "so only parts that are never merged (wings, flaps) are expected to show the texture. Results here are not representative.");
             }
 
-            if (_texture == null)
+            TextureLibrary.Entry entry = TextureLibrary.Current;
+            if (!LoadImage(entry))
             {
-                _texture = TestTexture.Create();
+                return;
             }
 
-            _activeAircraft = aircraft;
+            bool transfer = false;
+            if (entry != null && entry.ModelFilePath != null)
+            {
+                transfer = PrepareModel(entry.ModelFilePath);
+            }
 
-            int parts = 0;
-            int renderers = 0;
-            int skipped = 0;
+            _texture.wrapMode = transfer ? TextureWrapMode.Clamp : TextureWrapMode.Repeat;
+            if (!transfer)
+            {
+                _model = null;
+                _bvh = null;
+                _alignment = null;
+            }
+
+            // 1. Which renderers can be textured.
+            List<Candidate> candidates = new List<Candidate>();
             Dictionary<string, int> reasons = new Dictionary<string, int>();
-
+            int skipped = 0;
             foreach (PartData data in aircraft.Parts)
             {
                 PartScript part = data != null ? data.PartScript : null;
@@ -194,34 +236,74 @@ namespace SP2TextureMod
                     continue;
                 }
 
-                PartState state = new PartState { Part = part, Materials = part.PartMaterialScript, Aircraft = aircraft };
-                int applied = 0;
-
-                foreach (PartMaterialScript.RendererMaterialMap map in state.Materials.RendererMaps)
+                foreach (PartMaterialScript.RendererMaterialMap map in part.PartMaterialScript.RendererMaps)
                 {
                     string reason;
-                    if (!IsEligible(theme, map, out reason))
+                    if (IsEligible(theme, map, out reason))
+                    {
+                        candidates.Add(new Candidate { Part = part, Materials = part.PartMaterialScript, Map = map });
+                    }
+                    else
                     {
                         skipped++;
                         int n;
                         reasons.TryGetValue(reason, out n);
                         reasons[reason] = n + 1;
-                        continue;
-                    }
-
-                    if (ApplyRenderer(aircraft, theme, state, map))
-                    {
-                        applied++;
                     }
                 }
+            }
 
-                if (applied > 0)
+            if (candidates.Count == 0)
+            {
+                ReleaseTexture();
+                Fail("No procedural part (fuselage, wing...) was found on this aircraft.");
+                return;
+            }
+
+            _activeAircraft = aircraft;
+
+            // 2. Align the model to the craft.
+            string fit = "";
+            if (transfer)
+            {
+                transfer = FitModel(aircraft, candidates, out fit);
+                if (!transfer)
                 {
-                    Parts[part] = state;
+                    _texture.wrapMode = TextureWrapMode.Repeat;
+                }
+            }
+
+            // 3. Write UVs, styles and materials.
+            Stats.Reset();
+            int parts = 0;
+            int renderers = 0;
+            foreach (Candidate candidate in candidates)
+            {
+                PartState state;
+                if (!Parts.TryGetValue(candidate.Part, out state))
+                {
+                    state = new PartState { Part = candidate.Part, Materials = candidate.Materials, Aircraft = aircraft };
+                    Parts[candidate.Part] = state;
                     state.Materials.OnPaintedInDesigner += OnPainted;
-                    state.Materials.RefreshHighlight();
+                }
+
+                if (ApplyRenderer(aircraft, theme, state, candidate.Map))
+                {
+                    renderers++;
+                }
+            }
+
+            foreach (PartState state in new List<PartState>(Parts.Values))
+            {
+                if (state.Renderers.Count == 0)
+                {
+                    state.Materials.OnPaintedInDesigner -= OnPainted;
+                    Parts.Remove(state.Part);
+                }
+                else
+                {
                     parts++;
-                    renderers += applied;
+                    state.Materials.RefreshHighlight();
                 }
             }
 
@@ -236,83 +318,157 @@ namespace SP2TextureMod
                 skippedText.Append(pair.Key).Append(" x").Append(pair.Value);
             }
 
-            int albedoIndex = -1;
-            try { albedoIndex = AlbedoShaderIndex(theme); } catch (Exception) { }
+            string mode = transfer
+                ? "model UV transfer (" + _model.Name + ")"
+                : "tiled, " + Plugin.TilesPerMeter.Value.ToString("0.##", CultureInfo.InvariantCulture) + " per meter";
 
-            Plugin.Log.LogInfo(Tag + "applied to " + renderers + " renderer(s) of " + parts + " part(s) in " + watch.ElapsedMilliseconds
-                + " ms | style=" + _style + " shaderIndex=" + albedoIndex + " tilesPerMeter=" + Plugin.TestTilesPerMeter.Value
+            Plugin.Log.LogInfo(Tag + "applied '" + _textureName() + "' to " + renderers + " renderer(s) of " + parts + " part(s) in "
+                + watch.ElapsedMilliseconds + " ms | mode: " + mode
                 + " | skipped " + skipped + (skippedText.Length > 0 ? " (" + skippedText + ")" : ""));
-            Plugin.Log.LogInfo(Tag + "press the key again: 1st press = supersampled style, 2nd = plain style, 3rd = revert. The craft file is not modified.");
+            if (transfer)
+            {
+                Plugin.Log.LogInfo(Tag + "match quality: " + Stats.Describe(Plugin.MaxMatchDistance.Value));
+            }
+
+            StatusText = "Applied to " + renderers + " renderers, mode: " + mode
+                + (transfer ? "\n" + fit : "")
+                + (transfer ? "\n" + Stats.Describe(Plugin.MaxMatchDistance.Value) : "")
+                + "\nPress the apply key again to remove. The craft file is not modified.";
             _verifyFrame = Time.frameCount + 5;
         }
 
-        // Runs a few frames after applying and writes what the renderers really use now, so a blank
-        // result can be traced to the exact step that failed (material, texture, style, UV).
-        private static void Verify()
+        private static string _textureName()
         {
-            if (_activeAircraft == null || Parts.Count == 0)
+            return _texture != null ? _texture.name : "?";
+        }
+
+        private static bool LoadImage(TextureLibrary.Entry entry)
+        {
+            if (entry == null)
             {
-                return;
+                _texture = TestTexture.Create();
+                return true;
             }
 
-            ThemeScript theme = _activeAircraft.Theme;
-            Material atlas;
-            if (theme == null || !AtlasMaterials.TryGetValue(theme, out atlas) || atlas == null)
+            Texture2D texture = TextureLibrary.LoadTexture(entry);
+            if (texture == null)
             {
-                Plugin.Log.LogWarning(Tag + "verify: the atlas material no longer exists");
-                return;
+                Fail("Could not read the image '" + entry.FileName + "' (PNG or JPG expected).");
+                return false;
             }
 
-            Texture bound = atlas.GetTexture(BaseMapId);
-            Plugin.Log.LogInfo(Tag + "verify: material '" + atlas.name + "' shader='" + atlas.shader.name + "' hasBaseMap=" + atlas.HasProperty(BaseMapId)
-                + " baseMap=" + (bound != null ? bound.name + " " + bound.width + "x" + bound.height : "NULL")
-                + " renderQueue=" + atlas.renderQueue);
+            _texture = texture;
+            return true;
+        }
 
-            int index = AlbedoShaderIndex(theme);
-            Vector4[] data = atlas.GetVectorArray("_MaterialData");
-            if (data != null && data.Length > index * 10 + 3)
+        // Reads and indexes the OBJ (cached while the file and the mirror setting do not change).
+        private static bool PrepareModel(string path)
+        {
+            try
             {
-                Plugin.Log.LogInfo(Tag + "verify: _MaterialData length=" + data.Length + " entry for " + _style + " (index " + index + "): header="
-                    + data[index * 10] + " wrap=" + data[index * 10 + 1] + " color=" + data[index * 10 + 2]
-                    + " props(metallic,smoothness,emissionDay,emissionNight)=" + data[index * 10 + 3]
-                    + " (header.x is the paint style: plain Albedo 3, supersampled 4)");
-            }
-            else
-            {
-                Plugin.Log.LogWarning(Tag + "verify: _MaterialData is missing or too short (" + (data != null ? data.Length : -1) + ")");
-            }
-
-            int shown = 0;
-            foreach (PartState state in Parts.Values)
-            {
-                foreach (RendererState rs in state.Renderers.Values)
+                DateTime stamp = System.IO.File.GetLastWriteTimeUtc(path);
+                bool flip = Plugin.FlipModelX.Value;
+                if (_cacheModel == null || _cachePath != path || _cacheStamp != stamp || _cacheFlip != flip)
                 {
-                    if (shown >= 4)
+                    System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+                    string error;
+                    ObjModel model = ObjModel.Load(path, flip, out error);
+                    if (model == null)
                     {
-                        return;
+                        Plugin.Log.LogWarning(Tag + "model not used: " + error);
+                        StatusText = "Model not used: " + error;
+                        return false;
                     }
 
-                    Renderer renderer = rs.Map.Renderer;
-                    if (renderer == null)
-                    {
-                        continue;
-                    }
+                    _cacheBvh = new TriangleBvh(model);
+                    _cacheModel = model;
+                    _cachePath = path;
+                    _cacheStamp = stamp;
+                    _cacheFlip = flip;
 
-                    shown++;
-                    Material[] now = renderer.sharedMaterials;
-                    int usingAtlas = 0;
-                    for (int i = 0; i < now.Length; i++)
+                    Bounds b = model.Bounds;
+                    Plugin.Log.LogInfo(Tag + "model '" + model.Name + "': " + model.TriangleCount + " triangles, size ("
+                        + F(b.size.x) + ", " + F(b.size.y) + ", " + F(b.size.z) + "), mirrored on X=" + flip
+                        + ", loaded and indexed in " + watch.ElapsedMilliseconds + " ms");
+                }
+
+                _model = _cacheModel;
+                _bvh = _cacheBvh;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(Tag + "model not used: " + ex.Message);
+                StatusText = "Model not used: " + ex.Message;
+                _model = null;
+                _bvh = null;
+                return false;
+            }
+        }
+
+        // Samples the craft's procedural surface and finds the transform that puts the model on it.
+        private static bool FitModel(AircraftScript aircraft, List<Candidate> candidates, out string summary)
+        {
+            summary = "";
+            try
+            {
+                int total = 0;
+                foreach (Candidate c in candidates)
+                {
+                    total += c.Map.Mesh.vertexCount;
+                }
+
+                int stride = Mathf.Max(1, total / 700);
+                List<Vector3> samples = new List<Vector3>(800);
+                List<Vector3> vertices = new List<Vector3>();
+                Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+                Vector3 max = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+                int counter = 0;
+                foreach (Candidate c in candidates)
+                {
+                    vertices.Clear();
+                    c.Map.Mesh.GetVertices(vertices);
+                    Matrix4x4 toCraft = aircraft.transform.worldToLocalMatrix * c.Map.Renderer.transform.localToWorldMatrix;
+                    for (int i = 0; i < vertices.Count; i++)
                     {
-                        if (now[i] == atlas)
+                        Vector3 p = toCraft.MultiplyPoint3x4(vertices[i]);
+                        min = Vector3.Min(min, p);
+                        max = Vector3.Max(max, p);
+                        if (counter++ % stride == 0)
                         {
-                            usingAtlas++;
+                            samples.Add(p);
                         }
                     }
-
-                    Plugin.Log.LogInfo(Tag + "verify: part '" + state.Part.Part.Name + "' #" + state.Part.Part.Id + " renderer '" + renderer.name
-                        + "' submeshes using the atlas material=" + usingAtlas + "/" + now.Length
-                        + " enabled=" + renderer.enabled + " | " + DiagnosticDump.MeshSummary(rs.Map.Mesh));
                 }
+
+                Bounds bounds = new Bounds();
+                bounds.SetMinMax(min, max);
+
+                System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+                ModelAlignment auto = ModelAlignment.Fit(_model, _bvh, samples, bounds);
+                _alignment = auto.WithAdjustment(
+                    bounds.center,
+                    new Vector3(Plugin.AdjustOffsetX.Value, Plugin.AdjustOffsetY.Value, Plugin.AdjustOffsetZ.Value),
+                    new Vector3(Plugin.AdjustRotationX.Value, Plugin.AdjustRotationY.Value, Plugin.AdjustRotationZ.Value),
+                    Plugin.AdjustScale.Value);
+
+                summary = "Alignment: " + auto.Summary;
+                Plugin.Log.LogInfo(Tag + "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z)
+                    + ") | alignment found in " + watch.ElapsedMilliseconds + " ms: " + auto.Summary);
+                if (auto.MeanDistance > 0.08f * Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)))
+                {
+                    Plugin.Log.LogWarning(Tag + "the model does not fit the craft well (mean distance is large). "
+                        + "Is it the same aircraft? Use the Adjust* settings or try the setting FlipModelX = false.");
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning(Tag + "could not align the model, tiling instead: " + ex);
+                StatusText = "Could not align the model, tiling instead: " + ex.Message;
+                _alignment = null;
+                return false;
             }
         }
 
@@ -385,7 +541,16 @@ namespace SP2TextureMod
                 }
 
                 Mesh mesh = map.Mesh;
-                UvProjection.BoxProject(mesh, map.Renderer.transform, aircraft.transform, Plugin.TestTilesPerMeter.Value);
+                if (_alignment != null && _model != null && _bvh != null)
+                {
+                    UvTransfer.Write(mesh, map.Renderer.transform, aircraft.transform, _model, _bvh, _alignment,
+                        Plugin.NormalWeight.Value, Plugin.MaxMatchDistance.Value, Stats);
+                }
+                else
+                {
+                    UvProjection.BoxProject(mesh, map.Renderer.transform, aircraft.transform, Plugin.TilesPerMeter.Value);
+                }
+
                 if (!UvProjection.SetMaterialIndex(mesh, AlbedoShaderIndex(theme)))
                 {
                     Plugin.Log.LogWarning(Tag + "mesh '" + mesh.name + "' has no usable UV1");
@@ -450,10 +615,7 @@ namespace SP2TextureMod
 
             material.name = "SP2TextureMod Atlas";
             material.SetTexture(BaseMapId, _texture);
-            if (_style == PaintStyle.AlbedoTextureSupersampledWithMipmapBias)
-            {
-                material.SetFloat(SupersampleBiasId, -1f);
-            }
+            material.SetFloat(SupersampleBiasId, -1f);
 
             AtlasMaterials[theme] = material;
             return material;
@@ -461,7 +623,7 @@ namespace SP2TextureMod
 
         private static int AlbedoShaderIndex(ThemeScript theme)
         {
-            PartMaterial reserved = theme.Theme.GetReservedMaterial(_style);
+            PartMaterial reserved = theme.Theme.GetReservedMaterial(Style);
             return theme.Theme.GetMaterialIndex(reserved.Id);
         }
 
@@ -577,15 +739,24 @@ namespace SP2TextureMod
             }
 
             AtlasMaterials.Clear();
+            ReleaseTexture();
 
+            _model = null;
+            _bvh = null;
+            _alignment = null;
+            _activeAircraft = null;
+            _verifyFrame = -1;
+            StatusText = "Removed (" + renderers + " renderers restored).";
+            Plugin.Log.LogInfo(Tag + "reverted " + renderers + " renderer(s)");
+        }
+
+        private static void ReleaseTexture()
+        {
             if (_texture != null)
             {
                 UnityEngine.Object.Destroy(_texture);
                 _texture = null;
             }
-
-            _activeAircraft = null;
-            Plugin.Log.LogInfo(Tag + "reverted " + renderers + " renderer(s)");
         }
 
         // Forget parts and materials that were destroyed with their aircraft (left the designer, loaded another craft).
@@ -622,6 +793,73 @@ namespace SP2TextureMod
             if (Parts.Count == 0)
             {
                 _activeAircraft = null;
+            }
+        }
+
+        private static void Fail(string message)
+        {
+            StatusText = message;
+            Plugin.Log.LogWarning(Tag + message);
+        }
+
+        private static string F(float value)
+        {
+            return value.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        // ------------------------------------------------------------------ self-check
+
+        // Runs a few frames after applying and writes what the renderers really use now.
+        private static void Verify()
+        {
+            if (_activeAircraft == null || Parts.Count == 0)
+            {
+                return;
+            }
+
+            ThemeScript theme = _activeAircraft.Theme;
+            Material atlas;
+            if (theme == null || !AtlasMaterials.TryGetValue(theme, out atlas) || atlas == null)
+            {
+                Plugin.Log.LogWarning(Tag + "verify: the atlas material no longer exists");
+                return;
+            }
+
+            Texture bound = atlas.GetTexture(BaseMapId);
+            Plugin.Log.LogInfo(Tag + "verify: material '" + atlas.name + "' shader='" + atlas.shader.name + "' baseMap="
+                + (bound != null ? bound.name + " " + bound.width + "x" + bound.height : "NULL"));
+
+            int shown = 0;
+            foreach (PartState state in Parts.Values)
+            {
+                foreach (RendererState rs in state.Renderers.Values)
+                {
+                    if (shown >= 2)
+                    {
+                        return;
+                    }
+
+                    Renderer renderer = rs.Map.Renderer;
+                    if (renderer == null)
+                    {
+                        continue;
+                    }
+
+                    shown++;
+                    Material[] now = renderer.sharedMaterials;
+                    int usingAtlas = 0;
+                    for (int i = 0; i < now.Length; i++)
+                    {
+                        if (now[i] == atlas)
+                        {
+                            usingAtlas++;
+                        }
+                    }
+
+                    Plugin.Log.LogInfo(Tag + "verify: part '" + state.Part.Part.Name + "' #" + state.Part.Part.Id
+                        + " submeshes using the atlas material=" + usingAtlas + "/" + now.Length
+                        + " | " + DiagnosticDump.MeshSummary(rs.Map.Mesh));
+                }
             }
         }
     }

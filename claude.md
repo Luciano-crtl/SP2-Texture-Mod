@@ -21,7 +21,7 @@ Decals (the game's own `CraftDecals.xml` system, full RGBA, projected) remain th
 | Phase | What | State |
 |---|---|---|
 | 1 | Plugin loads, logs version, `[COMPAT]` reflection check, `[DIAG]` dump (hotkey, default F9) | **done, verified in the game** (log received, 62 compat checks OK) |
-| 2 | Albedo path test (hotkey F10 toggles): generated checker + box-projection UV0 on every procedural part, UV1.x -> reserved Albedo style, private clone of the part material; re-applied after mesh rebuild and after paint; must also be tried in flight | written, syntax-checked, **not compiled, not run** |
+| 2 | **done, verified in the game (designer)**: Albedo path test (hotkey toggles): generated checker + box-projection UV0 on every procedural part, UV1.x -> reserved Albedo style, private clone of the part material; re-applied after mesh rebuild and after paint; must also be tried in flight | written, syntax-checked, **not compiled, not run** |
 | 3 | Load atlas (PNG/JPG; TGA and DDS later) and OBJ; ghost preview and alignment; UV transfer with subdivision | not started |
 | 4 | Juicy panel and settings; persistence per craft | not started |
 | 5 | Multiplayer (default for now: local only) | not started |
@@ -37,6 +37,19 @@ Game 0.1.100, Unity 6000.3.20, BepInEx 5.4.23.5. User's test craft: 93 parts, 14
 - Procedural meshes are readable and unique (`uniqueMesh=True`). Typical size 250-1000 vertices; this craft has 51 fuselage parts, 6 wings, 11 flaps, 5 windows.
 - `Wing`, `Flap`, `Window` and `Propeller Assembly` have `combine=False` (never merged in flight); `Fuselage` has `combine=True`. 22 renderers already `excludeCombine=True` (flaps, wheels).
 - Another BepInEx plugin was loaded: "SP2 Reference Model 0.7.0" (injects controls into the designer main menu). Ask the user whether it is theirs: it may already hold the reference model transform that Phase 3 needs.
+
+## Phase 2 second run (verified in the game)
+
+With the supersampled style (4) the generated checker is drawn correctly on every procedural part of the Athena (fuselage, wings, tail). So the whole path works in the designer: UV0 write, UV1.x -> reserved style, private material clone with `_BaseMap`. **Use style 4 (`AlbedoTextureSupersampledWithMipmapBias`) with `_SupersampleMipmapBias = -1`; the plain style 3 is not drawn.**
+Also from the user's log: the game's own key table has F9 = ScreenshotMode, F10 = SelfDestruct (in flight!), F11 = DamageVisualizer; never use those. Keys now: Insert apply/remove, PageUp/PageDown image, Home/End tiling, Pause = log dump.
+
+## Phase 3 (written, not compiled, not run): own images and War Thunder model UV transfer
+
+- `TextureLibrary`: folder `<persistentDataPath>/TextureMod` (created with a README); PNG/JPG; an image with an OBJ of the same name uses UV transfer, an image alone is tiled with a box projection. Selection kept in the setting `Texture/SelectedTexture`.
+- `ObjModel` (OBJ parser, fan triangulation, optional X mirror), `TriangleBvh` (nearest point with a normal-aware cost), `ModelAlignment` (best of 24 axis orientations + coordinate descent on position, scale, rotation; quality = trimmed mean distance craft samples -> model surface), `UvTransfer` (per vertex: UV of the closest model point), `AtlasApplier` (orchestration, reversible, re-applied after mesh rebuild and paint).
+- Manual correction on top of the automatic fit: settings `Model adjustment/*` (offset, rotation, scale); the .cfg is re-read at every apply (`Config.Reload()`).
+- The result is written to the log as `[TEX] ...` lines: model size, craft size, alignment summary, match quality (mean/max distance, % of vertices farther than `MaxMatchDistance`).
+- Known limit of v1: per-vertex lookup, no subdivision; triangles that straddle two UV islands of the atlas will show a thin smeared band along the seam. Next step if it matters: subdivide only the triangles whose vertices fall in different islands. Designer only: not saved in the craft file, not applied in flight (needs the apply step before the mesh merge and a per-craft record).
 
 ## Phase 2 first run (verified in the game, user's log and screenshots)
 
