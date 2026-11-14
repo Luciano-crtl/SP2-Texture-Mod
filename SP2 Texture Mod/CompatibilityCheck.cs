@@ -98,6 +98,11 @@ namespace SP2TextureMod
                 Has(groupScript, "CombineMeshes");
                 Has(groupScript, "SurveyPartMeshes");
                 Has(groupScript, "GetTexturedMaterial");
+                Has(groupScript, "Initialize");
+                Has(groupScript, "Body");
+                Has(groupScript, "Parts");
+                Has("Assets.Scripts.Craft.BodyScript", "Aircraft");
+                Has("Assets.Scripts.Craft.BodyScript", "PartGroups");
 
                 // --- Parts and aircraft ---
                 Has("Assets.Scripts.Craft.Parts.PartScript", "Part");
@@ -116,6 +121,10 @@ namespace SP2TextureMod
                 Has(aircraft, "Theme");
                 Has(aircraft, "LoadContext");
                 Has(aircraft, "CalculateBounds");
+                Has(aircraft, "RemoteAircraft");
+                Has(aircraft, "Aircraft");
+                Has("Assets.Scripts.Craft.AircraftData", "Name");
+                EnumValue("Assets.Scripts.Craft.CraftLoadContext", "Flight");
 
                 // --- How the mod finds the current aircraft ---
                 Has("Assets.Scripts.Flight.FlightSceneScript", "Instance");

@@ -96,6 +96,40 @@ namespace SP2TextureMod
             return null;
         }
 
+        /// <summary>The aircraft open in the designer, or null (also when the designer is not the current scene).</summary>
+        internal static AircraftScript FindDesignerAircraft()
+        {
+            try
+            {
+                Assets.Scripts.Design.Designer designer = Assets.Scripts.Design.Designer.Instance;
+                if (designer != null && designer.Aircraft != null)
+                {
+                    return designer.Aircraft;
+                }
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogDebug(Tag + "designer lookup failed: " + ex.Message);
+            }
+
+            return null;
+        }
+
+        /// <summary>The craft's name as the game keeps it (empty if it has none yet).</summary>
+        internal static string CraftNameOf(AircraftScript aircraft)
+        {
+            try
+            {
+                string name = aircraft != null && aircraft.Aircraft != null ? aircraft.Aircraft.Name : null;
+                return name != null ? name.Trim() : "";
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogDebug(Tag + "craft name lookup failed: " + ex.Message);
+                return "";
+            }
+        }
+
         // ------------------------------------------------------------------ aircraft
 
         private static void DumpAircraft(AircraftScript aircraft)

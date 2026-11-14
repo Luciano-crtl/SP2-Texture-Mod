@@ -165,6 +165,13 @@ namespace SP2TextureMod
         public static void Write(Mesh mesh, Transform rendererTransform, Transform craftRoot,
             ObjModel model, TriangleBvh bvh, ModelAlignment alignment, Options options, Stats stats)
         {
+            Write(mesh, UvProjection.RendererToCraft(rendererTransform, craftRoot), model, bvh, alignment, options, stats);
+        }
+
+        /// <summary>The same, with the mesh-to-craft matrix already worked out.</summary>
+        public static void Write(Mesh mesh, Matrix4x4 toCraft,
+            ObjModel model, TriangleBvh bvh, ModelAlignment alignment, Options options, Stats stats)
+        {
             int count = mesh.vertexCount;
 
             List<Vector3> vertices = new List<Vector3>(count);
@@ -173,7 +180,6 @@ namespace SP2TextureMod
             mesh.GetNormals(normals);
             bool hasNormals = normals.Count == count;
 
-            Matrix4x4 toCraft = craftRoot.worldToLocalMatrix * rendererTransform.localToWorldMatrix;
             Matrix4x4 craftToObj = alignment.CraftToObj;
             Matrix4x4 objToCraft = alignment.ObjToCraft;
             float scale = Mathf.Max(alignment.Scale, 1e-6f);

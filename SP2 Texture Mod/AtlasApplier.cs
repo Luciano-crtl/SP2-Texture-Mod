@@ -22,9 +22,6 @@ namespace SP2TextureMod
     {
         private const string Tag = "[TEX] ";
 
-        // The textured style the game itself uses (gauge faces). The plain AlbedoTexture style is not drawn by the shader.
-        private const PaintStyle Style = PaintStyle.AlbedoTextureSupersampledWithMipmapBias;
-
         private sealed class RendererState
         {
             public PartMaterialScript.RendererMaterialMap Map;
@@ -54,20 +51,18 @@ namespace SP2TextureMod
         private static readonly Dictionary<ThemeScript, Material> AtlasMaterials = new Dictionary<ThemeScript, Material>();
 
         private static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
-        private static readonly int SupersampleBiasId = Shader.PropertyToID("_SupersampleMipmapBias");
         private static readonly int BumpMapId = Shader.PropertyToID("_BumpMap");
-        private static readonly int BumpScaleId = Shader.PropertyToID("_BumpScale");
         private static readonly int OcclusionMapId = Shader.PropertyToID("_OcclusionMap");
-        private static readonly int OcclusionStrengthId = Shader.PropertyToID("_OcclusionStrength");
         private static readonly int ParallaxMapId = Shader.PropertyToID("_ParallaxMap");
-        private static readonly int ParallaxId = Shader.PropertyToID("_Parallax");
-        private static readonly int MaterialDataId = Shader.PropertyToID("_MaterialData");
 
         // State of the current application.
         private static Texture2D _texture;
         private static Texture2D _normalMap;
         private static Texture2D _occlusionMap;
         private static Texture2D _heightMap;
+        private static bool _specularLoaded;
+        private static float _specularAverage;
+        private static AtlasLook _look = new AtlasLook();
         private static AircraftScript _activeAircraft;
         private static ObjModel _model;
         private static TriangleBvh _bvh;
@@ -87,12 +82,23 @@ namespace SP2TextureMod
         private static UvTransfer.Options _options;
         private static bool _frontFaces;
 
-        // The parsed OBJ is kept between applications (parsing a large model takes a moment).
-        private static string _cachePath;
-        private static DateTime _cacheStamp;
-        private static bool _cacheFlip;
-        private static ObjModel _cacheModel;
-        private static TriangleBvh _cacheBvh;
+        // Size of the craft (in its own space) when the alignment was made or taken from a saved file.
+        private static Bounds _fitBounds;
+        private static bool _hasFitBounds;
+
+        // A saved alignment that the next apply must use instead of searching for one (set when a craft's saved
+        // texture is put on again; used once, so that any later change in the panel works from a fresh search).
+        private static CraftAssignment _stored;
+        private static int _pendingOrientation;
+        private static bool _alignmentFromSaved;
+
+        // Opening a craft in the designer: the saved texture of that craft is put on by itself.
+        private static AircraftScript _autoAircraft;
+        private static string _autoName;
+        private static float _autoReadyAt;
+        private static bool _autoDone = true;
+        private static float _nextAutoCheck;
+        private static string _savedName;
 
         /// <summary>Short result of the last action, for the panel.</summary>
         public static string StatusText = "";
@@ -113,6 +119,21 @@ namespace SP2TextureMod
             StatusRows.Add(new[] { label, value });
         }
 
+        // Replaces the row with this label (or adds it).
+        private static void StatusSet(string label, string value)
+        {
+            for (int i = 0; i < StatusRows.Count; i++)
+            {
+                if (StatusRows[i][0] == label)
+                {
+                    StatusRows[i][1] = value;
+                    return;
+                }
+            }
+
+            StatusAdd(label, value);
+        }
+
         public static bool IsActive
         {
             get { return Parts.Count > 0; }
@@ -120,9 +141,22 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ entry points
 
-        /// <summary>Called every frame by the plugin; runs the delayed self-check after applying.</summary>
+        /// <summary>Called every frame by the plugin; puts a craft's saved texture on when it is opened, and runs the delayed self-check after applying.</summary>
         public static void Tick()
         {
+            try
+            {
+                AutoTick();
+            }
+            catch (Exception ex)
+            {
+                if (!_autoErrorLogged)
+                {
+                    _autoErrorLogged = true;
+                    Plugin.Log.LogWarning(Tag + "automatic apply failed (reported once): " + ex);
+                }
+            }
+
             if (_verifyFrame < 0 || Time.frameCount < _verifyFrame)
             {
                 return;
@@ -136,6 +170,219 @@ namespace SP2TextureMod
             catch (Exception ex)
             {
                 Plugin.Log.LogWarning(Tag + "verify failed: " + ex);
+            }
+        }
+
+        private static bool _autoErrorLogged;
+        private static int _autoTries;
+
+        // ------------------------------------------------------------------ saved texture of a craft
+
+        /// <summary>
+        /// Looks (twice a second) at the craft open in the designer. A craft that was just opened and has a saved
+        /// texture gets it put on; a craft that has a texture on it and was saved under another name keeps it
+        /// under that name too ("Save as").
+        /// </summary>
+        private static void AutoTick()
+        {
+            float now = Time.unscaledTime;
+            if (now < _nextAutoCheck)
+            {
+                return;
+            }
+
+            _nextAutoCheck = now + 0.5f;
+
+            AircraftScript aircraft = DiagnosticDump.FindDesignerAircraft();
+            if (aircraft == null)
+            {
+                _autoAircraft = null;
+                _autoName = null;
+                _autoDone = true;
+                return;
+            }
+
+            Prune();
+            string name = DiagnosticDump.CraftNameOf(aircraft);
+            bool active = Parts.Count > 0 && _activeAircraft == aircraft;
+
+            if (aircraft != _autoAircraft || name != _autoName)
+            {
+                // A texture is on the craft and the name changed: the craft was saved under another name ("Save as").
+                // Otherwise it is another craft (or one with a new name): look for its saved texture.
+                bool savedAs = aircraft == _autoAircraft && active;
+                _autoAircraft = aircraft;
+                _autoName = name;
+                _autoDone = savedAs;
+                _autoTries = 0;
+                _autoReadyAt = now + 1.5f; // let the designer build the parts of a newly opened craft
+
+                if (savedAs && name.Length > 0 && !string.Equals(name, _savedName, StringComparison.OrdinalIgnoreCase))
+                {
+                    SaveAssignment(aircraft);
+                }
+            }
+
+            if (_autoDone || now < _autoReadyAt)
+            {
+                return;
+            }
+
+            if (active || !Plugin.AutoApply.Value || name.Length == 0)
+            {
+                _autoDone = true;
+                return;
+            }
+
+            CraftAssignment assignment = CraftAssignment.Load(name);
+            if (assignment == null)
+            {
+                _autoDone = true;
+                return;
+            }
+
+            if (aircraft.Parts == null || aircraft.Parts.Count == 0)
+            {
+                _autoReadyAt = now + 1f; // the parts are not built yet
+                return;
+            }
+
+            _autoDone = true;
+            if (!ApplyAssignment(aircraft, name, assignment) && _autoTries < 4)
+            {
+                // The parts exist but their meshes were not ready: try again in a moment.
+                _autoTries++;
+                _autoDone = false;
+                _autoReadyAt = now + 2f;
+            }
+        }
+
+        // Puts the texture that was saved for the craft on it again: its settings go into the panel's settings,
+        // and its alignment is used as it is (no search).
+        private static bool ApplyAssignment(AircraftScript aircraft, string name, CraftAssignment assignment)
+        {
+            string problem;
+            if (!assignment.ApplyToConfig(out problem))
+            {
+                Plugin.Log.LogWarning(Tag + "the texture saved for the craft '" + name + "' was not put on: " + problem);
+                SetStatus("The texture saved for this craft was not put on: " + problem + ".");
+                return true; // nothing to wait for: the files are missing
+            }
+
+            Plugin.Log.LogInfo(Tag + "the craft '" + name + "' has a saved texture: image '" + assignment.Image + "', model '"
+                + (assignment.Model.Length > 0 ? assignment.Model : "none") + "', maps [" + assignment.Normal + "|" + assignment.Occlusion + "|"
+                + assignment.Specular + "|" + assignment.Height + "], alignment " + (assignment.HasAlignment ? "saved" : "none"));
+
+            InvalidateFit();
+            _stored = assignment;
+            _pendingOrientation = Mathf.Max(0, assignment.Orientation);
+            bool applied;
+            try
+            {
+                applied = ApplyAll(aircraft, aircraft.LoadContext.ToString(), false);
+            }
+            finally
+            {
+                _stored = null;
+            }
+
+            if (applied)
+            {
+                _savedName = name;
+            }
+
+            return applied;
+        }
+
+        /// <summary>Writes what is on the craft to the craft's saved-texture file (called after the texture or its settings changed).</summary>
+        public static void SaveAssignment()
+        {
+            Prune();
+            if (Parts.Count == 0 || _activeAircraft == null)
+            {
+                return;
+            }
+
+            SaveAssignment(_activeAircraft);
+        }
+
+        // Remembers what is on the craft under the craft's name, so that opening it in the designer or flying it
+        // puts the same texture on again.
+        private static void SaveAssignment(AircraftScript aircraft)
+        {
+            string name = DiagnosticDump.CraftNameOf(aircraft);
+            if (name.Length == 0)
+            {
+                _savedName = null;
+                StatusSet("Saved for flight", "no: the craft has no name yet");
+                Plugin.Log.LogInfo(Tag + "the craft has no name yet, so the texture is not saved for flight: save the craft, then apply again");
+                return;
+            }
+
+            TextureLibrary.Entry image = TextureLibrary.CurrentImage;
+            if (image == null)
+            {
+                StatusSet("Saved for flight", "no: no image in the folder");
+                return;
+            }
+
+            bool transfer = _alignment != null && _model != null && _bvh != null && _options != null;
+            CraftAssignment a = new CraftAssignment();
+            a.Image = image.FileName;
+            a.Model = transfer ? (TextureLibrary.CurrentModelName ?? "") : "";
+            a.Normal = TextureLibrary.Normal.CurrentName ?? "";
+            a.Occlusion = TextureLibrary.Occlusion.CurrentName ?? "";
+            a.Height = TextureLibrary.Height.CurrentName ?? "";
+            a.Specular = TextureLibrary.Specular.CurrentName ?? "";
+            a.TilesPerMeter = Plugin.TilesPerMeter.Value;
+            a.FlipModelX = Plugin.FlipModelX.Value;
+
+            if (transfer)
+            {
+                a.HasAlignment = true;
+                a.ObjToCraft = _alignment.ObjToCraft;
+                a.NormalsInverted = _bvh.NormalsInverted;
+                a.FrontFaces = _frontFaces;
+                a.Project = _options.Project;
+                a.RayStart = _options.RayStartMeters;
+                a.FacingWeight = _options.FacingWeightSquareMeters;
+                a.MaxDistance = _options.MaxDistanceMeters;
+            }
+
+            a.Orientation = _fitChoice;
+            a.Offset = new Vector3(Plugin.AdjustOffsetX.Value, Plugin.AdjustOffsetY.Value, Plugin.AdjustOffsetZ.Value);
+            a.Rotation = new Vector3(Plugin.AdjustRotationX.Value, Plugin.AdjustRotationY.Value, Plugin.AdjustRotationZ.Value);
+            a.AdjustScale = Plugin.AdjustScale.Value;
+
+            a.NormalStrength = Plugin.NormalStrength.Value;
+            a.FlipNormalGreen = Plugin.FlipNormalGreen.Value;
+            a.RebuildNormalZ = Plugin.RebuildNormalZ.Value;
+            a.HeightToNormal = Plugin.HeightToNormal.Value;
+            a.BumpStrength = Plugin.BumpStrength.Value;
+            a.OcclusionStrength = Plugin.OcclusionStrength.Value;
+            a.UseParallax = Plugin.UseParallax.Value;
+            a.ParallaxHeight = Plugin.ParallaxHeight.Value;
+            a.Metallic = Plugin.Metallic.Value;
+            a.Smoothness = Plugin.Smoothness.Value;
+            a.SpecularAverage = _specularLoaded ? _specularAverage : 0f;
+            a.SpecularGain = Plugin.SpecularGain.Value;
+
+            if (_hasFitBounds)
+            {
+                a.HasBounds = true;
+                a.BoundsCenter = _fitBounds.center;
+                a.BoundsSize = _fitBounds.size;
+            }
+
+            if (a.Save(name))
+            {
+                _savedName = name;
+                StatusSet("Saved for flight", "yes, for the craft '" + name + "'");
+                Plugin.Log.LogInfo(Tag + "texture saved for the craft '" + name + "': " + CraftAssignment.FilePathFor(name));
+            }
+            else
+            {
+                StatusSet("Saved for flight", "no: could not write the file (see the log)");
             }
         }
 
@@ -161,17 +408,30 @@ namespace SP2TextureMod
             }
         }
 
-        /// <summary>Removes the texture from the aircraft and restores its normal paint.</summary>
+        /// <summary>Removes the texture from the aircraft, restores its normal paint and forgets the texture saved for the craft.</summary>
         public static void RemoveCurrent()
         {
             Prune();
+            AircraftScript aircraft = _activeAircraft != null ? _activeAircraft : DiagnosticDump.FindDesignerAircraft();
+            string name = aircraft != null ? DiagnosticDump.CraftNameOf(aircraft) : "";
+            bool forgotten = name.Length > 0 && CraftAssignment.Delete(name);
+            if (forgotten)
+            {
+                _savedName = null;
+                Plugin.Log.LogInfo(Tag + "the texture saved for the craft '" + name + "' was forgotten");
+            }
+
             if (Parts.Count > 0)
             {
                 RevertAll();
+                if (forgotten)
+                {
+                    StatusText += " The texture saved for this craft was forgotten.";
+                }
             }
             else
             {
-                SetStatus("Nothing to remove.");
+                SetStatus(forgotten ? "Nothing on the craft; the texture saved for it was forgotten." : "Nothing to remove.");
             }
         }
 
@@ -180,6 +440,7 @@ namespace SP2TextureMod
         {
             _fitCandidates = null;
             _fitChoice = 0;
+            _pendingOrientation = 0;
         }
 
         /// <summary>Tries the next best orientation of the model (when the best one has the model upside-down, for instance).</summary>
@@ -202,7 +463,7 @@ namespace SP2TextureMod
             {
                 if (_fitCandidates == null || _fitCandidates.Count == 0)
                 {
-                    return "-";
+                    return _alignmentFromSaved ? "saved with the craft (no search)" : "-";
                 }
 
                 ModelAlignment current = _fitCandidates[Mathf.Clamp(_fitChoice, 0, _fitCandidates.Count - 1)];
@@ -273,15 +534,17 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ apply
 
-        private static void ApplyAll(AircraftScript aircraft, string context)
+        private static bool ApplyAll(AircraftScript aircraft, string context, bool save = true)
         {
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            _hasFitBounds = false;
+            _alignmentFromSaved = false;
 
             ThemeScript theme = aircraft.Theme;
             if (theme == null || theme.Theme == null || theme.Material == null)
             {
                 Fail("The aircraft has no usable theme.");
-                return;
+                return false;
             }
 
             if (aircraft.LoadContext != CraftLoadContext.Designer)
@@ -293,10 +556,11 @@ namespace SP2TextureMod
             TextureLibrary.Entry entry = TextureLibrary.CurrentImage;
             if (!LoadImage(entry))
             {
-                return;
+                return false;
             }
 
             LoadMaps();
+            BuildLook();
 
             bool transfer = false;
             string modelPath = TextureLibrary.CurrentModelPath;
@@ -349,7 +613,7 @@ namespace SP2TextureMod
             {
                 ReleaseTexture();
                 Fail("No procedural part (fuselage, wing...) was found on this aircraft.");
-                return;
+                return false;
             }
 
             _activeAircraft = aircraft;
@@ -451,7 +715,17 @@ namespace SP2TextureMod
             }
 
             StatusAdd("Craft file", "not modified");
+            if (save)
+            {
+                SaveAssignment(aircraft);
+            }
+            else
+            {
+                StatusSet("Saved for flight", "yes, put on from the craft's saved file");
+            }
+
             _verifyFrame = Time.frameCount + 5;
+            return true;
         }
 
         private static string _textureName()
@@ -481,46 +755,20 @@ namespace SP2TextureMod
         // Reads and indexes the OBJ (cached while the file and the mirror setting do not change).
         private static bool PrepareModel(string path)
         {
-            try
+            ObjModel model;
+            TriangleBvh bvh;
+            string error;
+            if (!ModelCache.Get(path, Plugin.FlipModelX.Value, out model, out bvh, out error))
             {
-                DateTime stamp = System.IO.File.GetLastWriteTimeUtc(path);
-                bool flip = Plugin.FlipModelX.Value;
-                if (_cacheModel == null || _cachePath != path || _cacheStamp != stamp || _cacheFlip != flip)
-                {
-                    System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-                    string error;
-                    ObjModel model = ObjModel.Load(path, flip, out error);
-                    if (model == null)
-                    {
-                        Plugin.Log.LogWarning(Tag + "model not used: " + error);
-                        SetStatus("Model not used: " + error);
-                        return false;
-                    }
-
-                    _cacheBvh = new TriangleBvh(model);
-                    _cacheModel = model;
-                    _cachePath = path;
-                    _cacheStamp = stamp;
-                    _cacheFlip = flip;
-
-                    Bounds b = model.Bounds;
-                    Plugin.Log.LogInfo(Tag + "model '" + model.Name + "': " + model.TriangleCount + " triangles, size ("
-                        + F(b.size.x) + ", " + F(b.size.y) + ", " + F(b.size.z) + "), mirrored on X=" + flip
-                        + ", loaded and indexed in " + watch.ElapsedMilliseconds + " ms");
-                }
-
-                _model = _cacheModel;
-                _bvh = _cacheBvh;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Plugin.Log.LogWarning(Tag + "model not used: " + ex.Message);
-                SetStatus("Model not used: " + ex.Message);
+                SetStatus("Model not used: " + error);
                 _model = null;
                 _bvh = null;
                 return false;
             }
+
+            _model = model;
+            _bvh = bvh;
+            return true;
         }
 
         // Samples the craft's procedural surface and finds the transform that puts the model on it.
@@ -550,7 +798,7 @@ namespace SP2TextureMod
                     c.Map.Mesh.GetVertices(vertices);
                     c.Map.Mesh.GetNormals(normals);
                     bool hasNormals = normals.Count == vertices.Count;
-                    Matrix4x4 toCraft = aircraft.transform.worldToLocalMatrix * c.Map.Renderer.transform.localToWorldMatrix;
+                    Matrix4x4 toCraft = UvProjection.RendererToCraft(c.Map.Renderer.transform, aircraft.transform);
                     for (int i = 0; i < vertices.Count; i++)
                     {
                         Vector3 p = toCraft.MultiplyPoint3x4(vertices[i]);
@@ -566,17 +814,28 @@ namespace SP2TextureMod
 
                 Bounds bounds = new Bounds();
                 bounds.SetMinMax(min, max);
+                _fitBounds = bounds;
+                _hasFitBounds = true;
 
                 System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+
+                // The alignment saved with the craft is used as it is: nothing is searched.
+                if (_stored != null && _stored.HasAlignment)
+                {
+                    UseStoredAlignment(_stored, bounds, out summary);
+                    return true;
+                }
+
                 bool reused = _fitCandidates != null && _fitCandidates.Count > 0 && _fitAircraft == aircraft
-                    && _fitModelPath == _cachePath && _fitFlip == _cacheFlip;
+                    && _fitModelPath == ModelCache.LoadedPath && _fitFlip == ModelCache.LoadedFlip;
                 if (!reused)
                 {
                     _fitCandidates = ModelAlignment.FitCandidates(_model, _bvh, samples, bounds);
-                    _fitChoice = 0;
+                    _fitChoice = Mathf.Clamp(_pendingOrientation, 0, _fitCandidates.Count - 1);
+                    _pendingOrientation = 0;
                     _fitAircraft = aircraft;
-                    _fitModelPath = _cachePath;
-                    _fitFlip = _cacheFlip;
+                    _fitModelPath = ModelCache.LoadedPath;
+                    _fitFlip = ModelCache.LoadedFlip;
 
                     System.Text.StringBuilder list = new System.Text.StringBuilder();
                     for (int i = 0; i < _fitCandidates.Count; i++)
@@ -654,6 +913,46 @@ namespace SP2TextureMod
             }
         }
 
+        // The model-to-craft matrix saved with the craft is the final alignment (the search and the manual
+        // adjustment together): it is used as it is. Whether the craft still looks like it did is only reported.
+        private static void UseStoredAlignment(CraftAssignment stored, Bounds bounds, out string summary)
+        {
+            _alignment = ModelAlignment.FromMatrix(stored.ObjToCraft);
+            _bvh.SetNormalsInverted(stored.NormalsInverted);
+            _frontFaces = stored.FrontFaces;
+            _alignmentFromSaved = true;
+            _fitCandidates = null; // a change made later in the panel searches again
+            _fitChoice = 0;
+            _facingShort = "saved" + (stored.NormalsInverted ? " (turned around)" : "");
+
+            _options = new UvTransfer.Options
+            {
+                Project = stored.Project,
+                RayStartMeters = stored.RayStart,
+                MaxDistanceMeters = stored.MaxDistance,
+                FrontFacesOnly = _frontFaces,
+                FacingWeightSquareMeters = stored.FacingWeight,
+                FarLimitMeters = stored.MaxDistance
+            };
+
+            summary = "alignment taken from the craft's saved file";
+            Plugin.Log.LogInfo(Tag + "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z)
+                + ") | alignment: " + summary + " | scale " + F(_alignment.Scale) + " | method: "
+                + (_options.Project ? "project along normals" : "nearest surface") + ", front faces only: " + _frontFaces);
+
+            if (stored.HasBounds)
+            {
+                float size = Mathf.Max(stored.BoundsSize.x, Mathf.Max(stored.BoundsSize.y, stored.BoundsSize.z));
+                float moved = (bounds.center - stored.BoundsCenter).magnitude;
+                float changed = (bounds.size - stored.BoundsSize).magnitude;
+                if (moved > 0.05f * size || changed > 0.05f * size)
+                {
+                    Plugin.Log.LogWarning(Tag + "the craft is not the same as when the texture was applied (its center moved "
+                        + F(moved) + " m, its size changed " + F(changed) + " m). If the texture looks shifted, press Align again.");
+                }
+            }
+        }
+
         // Share of the samples whose nearest model face points the same way as the craft's normal there.
         private static float FacingAgreement(List<Vector3> positions, List<Vector3> normals, ModelAlignment alignment)
         {
@@ -690,7 +989,7 @@ namespace SP2TextureMod
             return (100f * fraction).ToString("0", CultureInfo.InvariantCulture) + "%";
         }
 
-        private static bool IsEligible(ThemeScript theme, PartMaterialScript.RendererMaterialMap map, out string reason)
+        internal static bool IsEligible(ThemeScript theme, PartMaterialScript.RendererMaterialMap map, out string reason)
         {
             reason = null;
 
@@ -768,7 +1067,7 @@ namespace SP2TextureMod
                     UvProjection.BoxProject(mesh, map.Renderer.transform, aircraft.transform, Plugin.TilesPerMeter.Value);
                 }
 
-                if (!UvProjection.SetMaterialIndex(mesh, AlbedoShaderIndex(theme)))
+                if (!UvProjection.SetMaterialIndex(mesh, AtlasMaterial.AlbedoShaderIndex(theme)))
                 {
                     Plugin.Log.LogWarning(Tag + "mesh '" + mesh.name + "' has no usable UV1");
                     return false;
@@ -837,17 +1136,12 @@ namespace SP2TextureMod
             }
 
             // A clone of the shared part material that the theme keeps up to date (_MaterialData...).
-            material = theme.RequestDefaultPartMaterialInstance();
+            material = AtlasMaterial.Create(theme, _look);
             if (material == null)
             {
                 Plugin.Log.LogWarning(Tag + "the theme did not give a material instance");
                 return null;
             }
-
-            material.name = "SP2TextureMod Atlas";
-            material.SetTexture(BaseMapId, _texture);
-            material.SetFloat(SupersampleBiasId, -1f);
-            ConfigureMaterial(material, theme);
 
             AtlasMaterials[theme] = material;
             return material;
@@ -855,13 +1149,14 @@ namespace SP2TextureMod
 
         // ------------------------------------------------------------------ maps and material values
 
-        // Loads the normal, occlusion and height maps chosen in the panel (any of them may be missing).
+        // Loads the normal, occlusion, specular and height maps chosen in the panel (any of them may be missing).
         private static void LoadMaps()
         {
             ReleaseMaps();
 
             TextureLibrary.Entry normal = TextureLibrary.Normal.Current;
             TextureLibrary.Entry occlusion = TextureLibrary.Occlusion.Current;
+            TextureLibrary.Entry specular = TextureLibrary.Specular.Current;
             TextureLibrary.Entry height = TextureLibrary.Height.Current;
             string note;
 
@@ -889,6 +1184,25 @@ namespace SP2TextureMod
                 {
                     _heightMap = MapTextures.LoadHeight(height.FilePath, out note);
                     LogMap("height map (parallax)", height.FileName, _heightMap, note);
+                }
+
+                if (specular != null)
+                {
+                    float average;
+                    float bright;
+                    if (MapTextures.AnalyzeSpecular(specular.FilePath, out average, out bright, out note))
+                    {
+                        _specularLoaded = true;
+                        _specularAverage = average;
+                        Plugin.Log.LogInfo(Tag + "specular map '" + specular.FileName + "': " + note
+                            + ". The part shader has no specular map: the average adds "
+                            + F(AtlasMaterial.EffectiveSmoothness(0f, average, Plugin.SpecularGain.Value)) + " to the smoothness (gain "
+                            + F(Plugin.SpecularGain.Value) + ").");
+                    }
+                    else
+                    {
+                        Plugin.Log.LogWarning(Tag + "specular map '" + specular.FileName + "' not used: " + note);
+                    }
                 }
             }
             catch (Exception ex)
@@ -929,6 +1243,8 @@ namespace SP2TextureMod
             _normalMap = null;
             _occlusionMap = null;
             _heightMap = null;
+            _specularLoaded = false;
+            _specularAverage = 0f;
         }
 
         private static string MapsSummary()
@@ -936,70 +1252,36 @@ namespace SP2TextureMod
             string text = "";
             if (_normalMap != null) text += "normal";
             if (_occlusionMap != null) text += (text.Length > 0 ? ", " : "") + "occlusion";
+            if (_specularLoaded) text += (text.Length > 0 ? ", " : "") + "specular (average only)";
             if (_heightMap != null) text += (text.Length > 0 ? ", " : "") + "height";
             return text.Length > 0 ? text : "none";
         }
 
-        // The shader's own switches for each map: the keyword makes it read the texture, the strength sets how much.
-        private static void ConfigureMaterial(Material material, ThemeScript theme)
+        // What the material shows: the images just loaded and the settings of the panel.
+        private static void BuildLook()
         {
-            SetMap(material, "_NORMALMAP", BumpMapId, _normalMap);
-            if (_normalMap != null)
-            {
-                material.SetFloat(BumpScaleId, Plugin.NormalStrength.Value);
-            }
-
-            SetMap(material, "_OCCLUSIONMAP", OcclusionMapId, _occlusionMap);
-            if (_occlusionMap != null)
-            {
-                material.SetFloat(OcclusionStrengthId, Plugin.OcclusionStrength.Value);
-            }
-
-            SetMap(material, "_PARALLAXMAP", ParallaxMapId, _heightMap);
-            if (_heightMap != null)
-            {
-                material.SetFloat(ParallaxId, Plugin.ParallaxHeight.Value);
-            }
-
-            ApplyConstants(material, theme);
+            _look.Albedo = _texture;
+            _look.Normal = _normalMap;
+            _look.Occlusion = _occlusionMap;
+            _look.Height = _heightMap;
+            UpdateLookValues();
         }
 
-        private static void SetMap(Material material, string keyword, int propertyId, Texture2D texture)
+        // The strengths, metallic and smoothness (the specular map's average adds to the smoothness).
+        private static void UpdateLookValues()
         {
-            if (texture != null)
-            {
-                material.SetTexture(propertyId, texture);
-                material.EnableKeyword(keyword);
-            }
-            else
-            {
-                material.SetTexture(propertyId, null);
-                material.DisableKeyword(keyword);
-            }
-        }
-
-        // Metallic and smoothness have no map in the part shader: they come from the paint material's entry in
-        // _MaterialData (metallic, smoothness, emission day, emission night). The reserved albedo entry of this
-        // material instance gets the values chosen in the panel; the craft's own theme is not touched.
-        private static void ApplyConstants(Material material, ThemeScript theme)
-        {
-            int index = AlbedoShaderIndex(theme) * 10 + 3;
-            Vector4[] data = material.GetVectorArray(MaterialDataId);
-            if (data == null || data.Length <= index)
-            {
-                return;
-            }
-
-            Vector4 values = data[index];
-            values.x = Plugin.Metallic.Value;
-            values.y = Plugin.Smoothness.Value;
-            data[index] = values;
-            material.SetVectorArray(MaterialDataId, data);
+            _look.NormalStrength = Plugin.NormalStrength.Value;
+            _look.OcclusionStrength = Plugin.OcclusionStrength.Value;
+            _look.ParallaxHeight = Plugin.ParallaxHeight.Value;
+            _look.Metallic = Plugin.Metallic.Value;
+            _look.Smoothness = AtlasMaterial.EffectiveSmoothness(Plugin.Smoothness.Value,
+                _specularLoaded ? _specularAverage : 0f, Plugin.SpecularGain.Value);
         }
 
         /// <summary>Applies the strength, metallic and smoothness settings to the material that is already in use.</summary>
         public static void RefreshMaterial()
         {
+            UpdateLookValues();
             foreach (KeyValuePair<ThemeScript, Material> pair in AtlasMaterials)
             {
                 if (pair.Value == null)
@@ -1009,44 +1291,13 @@ namespace SP2TextureMod
 
                 try
                 {
-                    ConfigureMaterial(pair.Value, pair.Key);
+                    AtlasMaterial.Update(pair.Value, pair.Key, _look);
                 }
                 catch (Exception ex)
                 {
                     Plugin.Log.LogWarning(Tag + "could not refresh the material: " + ex.Message);
                 }
             }
-        }
-
-        /// <summary>
-        /// The theme rewrites _MaterialData of every material it keeps whenever the paint changes; this puts
-        /// the metallic and smoothness chosen in the panel back on ours.
-        /// </summary>
-        public static void OnThemeMaterialUpdated(ThemeScript theme, Material material)
-        {
-            if (AtlasMaterials.Count == 0)
-            {
-                return;
-            }
-
-            Material atlas;
-            if (AtlasMaterials.TryGetValue(theme, out atlas) && atlas == material)
-            {
-                try
-                {
-                    ApplyConstants(atlas, theme);
-                }
-                catch (Exception ex)
-                {
-                    Plugin.Log.LogWarning(Tag + "could not keep the metallic and smoothness: " + ex.Message);
-                }
-            }
-        }
-
-        private static int AlbedoShaderIndex(ThemeScript theme)
-        {
-            PartMaterial reserved = theme.Theme.GetReservedMaterial(Style);
-            return theme.Theme.GetMaterialIndex(reserved.Id);
         }
 
         private static Material[] Fill(int count, Material material)
@@ -1160,7 +1411,7 @@ namespace SP2TextureMod
             {
                 if (pair.Value != null)
                 {
-                    pair.Key.ReleaseDefaultPartMaterialInstance(pair.Value);
+                    AtlasMaterial.Release(pair.Key, pair.Value);
                 }
             }
 
@@ -1191,6 +1442,8 @@ namespace SP2TextureMod
         // Forget parts and materials that were destroyed with their aircraft (left the designer, loaded another craft).
         private static void Prune()
         {
+            AtlasMaterial.Prune();
+
             List<PartScript> dead = new List<PartScript>();
             foreach (KeyValuePair<PartScript, PartState> pair in Parts)
             {

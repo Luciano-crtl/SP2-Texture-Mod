@@ -113,6 +113,54 @@ namespace SP2TextureMod
             return MakeLinear(Path.GetFileName(path), width, height, pixels);
         }
 
+        /// <summary>
+        /// The part shader cannot read a specular map, so the image is only measured: the average brightness
+        /// (0 = black, 1 = white) and the share of clearly bright pixels. The average is what the mod uses.
+        /// </summary>
+        public static bool AnalyzeSpecular(string path, out float average, out float brightShare, out string note)
+        {
+            average = 0f;
+            brightShare = 0f;
+
+            int width;
+            int height;
+            Color32[] pixels = ReadPixels(path, out width, out height);
+            if (pixels == null)
+            {
+                note = "could not read the image";
+                return false;
+            }
+
+            // About 200 thousand samples are plenty; an odd step does not line up with the rows.
+            int step = Math.Max(1, pixels.Length / 200000) | 1;
+            double sum = 0.0;
+            int bright = 0;
+            int total = 0;
+            for (int i = 0; i < pixels.Length; i += step)
+            {
+                Color32 c = pixels[i];
+                float value = (c.r + c.g + c.b) / (3f * 255f);
+                sum += value;
+                total++;
+                if (value > 0.5f)
+                {
+                    bright++;
+                }
+            }
+
+            if (total == 0)
+            {
+                note = "empty image";
+                return false;
+            }
+
+            average = (float)(sum / total);
+            brightShare = (float)bright / total;
+            note = width + "x" + height + ", average " + (100f * average).ToString("0.#", CultureInfo.InvariantCulture)
+                + "%, " + (100f * brightShare).ToString("0.#", CultureInfo.InvariantCulture) + "% of the pixels are bright";
+            return true;
+        }
+
         // Decodes a PNG or JPG into raw pixels (through a throwaway texture).
         private static Color32[] ReadPixels(string path, out int width, out int height)
         {
@@ -146,7 +194,7 @@ namespace SP2TextureMod
             texture.wrapMode = TextureWrapMode.Repeat;
             texture.filterMode = FilterMode.Trilinear;
             texture.anisoLevel = 8;
-            texture.Apply(true, false);
+            texture.Apply(true, true); // maps are never read back: free the copy of the pixels kept in memory
             return texture;
         }
 

@@ -369,3 +369,8 @@ _decompiled/
 decompiled/
 # Python virtualenv used by tools/check_syntax.py
 .venv/
+
+# Compile check: generated stand-in and build output
+tools/compile-check/Stubs/DiagnosticDumpStub.cs
+tools/compile-check/bin/
+tools/compile-check/obj/

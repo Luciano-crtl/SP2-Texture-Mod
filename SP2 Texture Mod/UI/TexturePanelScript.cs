@@ -15,7 +15,7 @@ namespace SP2TextureMod.UI
     public class TexturePanelScript : PanelDialogScript
     {
         private const float RefreshInterval = 0.5f;
-        private const int DetailRows = 10;
+        private const int DetailRows = 14;
 
         private Widget content;
         private PanelBuilder builder;
@@ -115,11 +115,20 @@ namespace SP2TextureMod.UI
         private void BuildApply()
         {
             builder.Header("Apply");
+            builder.Text("Note", "Apply saves the texture for this craft (by its name). Opening the craft or flying it puts it on again. Remove takes it off and forgets it.");
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Apply to craft", AtlasApplier.ApplyCurrent),
-                new KeyValuePair<string, Action>("Remove", AtlasApplier.RemoveCurrent),
+                new KeyValuePair<string, Action>("Remove and forget", AtlasApplier.RemoveCurrent),
             });
+            builder.Toggle("Put the saved texture on by itself",
+                "With this on, opening a craft that has a saved texture (in the designer) or flying it puts the texture on again without pressing anything.",
+                Plugin.AutoApply.Value,
+                on =>
+                {
+                    SetValue(Plugin.AutoApply, on);
+                    SaveConfig();
+                });
 
             // The result of the last action, then the details of the last apply as short label/value rows.
             Live("Status", () => AtlasApplier.StatusText ?? "");
@@ -148,14 +157,15 @@ namespace SP2TextureMod.UI
 
         private void BuildMaps()
         {
-            builder.Header("Maps (normal, occlusion, height)", collapsed: true);
-            builder.Text("Note", "The part shader reads a normal, an occlusion and a height map. They are found by name next to the albedo image (_n, _ao, _h or _bump) or chosen here.");
+            builder.Header("Maps (normal, occlusion, specular, height)", collapsed: true);
+            builder.Text("Note", "The part shader reads a normal, an occlusion and a height map. They are found by name next to the albedo image (_n_n, _n_ao, _n_s, _n, _ao, _h or _bump) or chosen here. It has no specular map: only the average of that image is used.");
             MapRows(TextureLibrary.Normal);
             MapRows(TextureLibrary.Occlusion);
+            MapRows(TextureLibrary.Specular);
             MapRows(TextureLibrary.Height);
 
             FloatSetting(Plugin.NormalStrength, "Normal strength", "How strong the relief of the normal map is.",
-                0.05f, 0f, 3f, "x", null, AtlasApplier.RefreshMaterial);
+                0.05f, 0f, 3f, "x", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
             builder.Toggle("Flip normal green",
                 "DirectX-style normal maps (many game textures) need the green channel flipped. Turn it on if the relief looks inverted (bumps look like dents).",
                 Plugin.FlipNormalGreen.Value,
@@ -186,7 +196,7 @@ namespace SP2TextureMod.UI
             FloatSetting(Plugin.BumpStrength, "Bump strength", "Strength used when a height (bump) image is converted to a normal map.",
                 0.1f, 0.1f, 20f, "", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.OcclusionStrength, "Occlusion strength", "How dark the occlusion map makes the creases.",
-                0.05f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+                0.05f, 0f, 1f, "", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
             builder.Toggle("Parallax (height map)",
                 "Uses the height map to give the surface depth. Experimental: it can distort the texture.",
                 Plugin.UseParallax.Value,
@@ -197,17 +207,20 @@ namespace SP2TextureMod.UI
                     AtlasApplier.ReapplyIfActive();
                 });
             FloatSetting(Plugin.ParallaxHeight, "Parallax depth", "Depth of the parallax effect.",
-                0.005f, 0.005f, 0.08f, "", null, AtlasApplier.RefreshMaterial);
+                0.005f, 0.005f, 0.08f, "", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
         }
 
         private void BuildMaterial()
         {
             builder.Header("Material (metallic, smoothness)", collapsed: true);
-            builder.Text("Note", "One value for all of the textured parts: the part shader has no metallic or smoothness map.");
+            builder.Text("Note", "One value for all of the textured parts: the part shader has no metallic, smoothness or specular map.");
             FloatSetting(Plugin.Metallic, "Metallic", "How metallic the textured parts look.",
-                0.01f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+                0.01f, 0f, 1f, "", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
             FloatSetting(Plugin.Smoothness, "Smoothness", "How glossy the textured parts look.",
-                0.01f, 0f, 1f, "", null, AtlasApplier.RefreshMaterial);
+                0.01f, 0f, 1f, "", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
+            FloatSetting(Plugin.SpecularGain, "Specular map gain",
+                "The average brightness of the specular map, times this, is added to the smoothness. 0 ignores the specular map.",
+                0.1f, 0f, 6f, "x", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
         }
 
         private void MapRows(TextureLibrary.MapSlot slot)

@@ -37,6 +37,36 @@ namespace SP2TextureMod
             {
                 Plugin.Log.LogWarning("[PATCH] ProceduralMeshPatch postfix failed: " + ex.Message);
             }
+
+            try
+            {
+                FlightApplier.OnMeshRebuilt(__instance);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[PATCH] ProceduralMeshPatch flight postfix failed: " + ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// In flight a group of parts merges the meshes of its parts into one when it initializes (the frame after the
+    /// aircraft is activated). This runs just before that: the saved texture is put on the procedural parts of the
+    /// group, which are marked "do not merge" so they keep their own renderer and material.
+    /// </summary>
+    [HarmonyPatch(typeof(PartGroupScript), "Initialize")]
+    internal static class PartGroupInitializePatch
+    {
+        private static void Prefix(PartGroupScript __instance)
+        {
+            try
+            {
+                FlightApplier.OnGroupInitializing(__instance);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning("[PATCH] PartGroupInitializePatch prefix failed: " + ex);
+            }
         }
     }
 
@@ -51,7 +81,7 @@ namespace SP2TextureMod
         {
             try
             {
-                AtlasApplier.OnThemeMaterialUpdated(__instance, material);
+                AtlasMaterial.OnThemeMaterialUpdated(__instance, material);
             }
             catch (Exception ex)
             {

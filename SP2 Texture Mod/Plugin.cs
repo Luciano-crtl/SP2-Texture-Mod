@@ -25,7 +25,7 @@ namespace SP2TextureMod
         public const string Version = "0.1.0";
 
         // Which development phase this build contains (the version is only bumped when a whole set is done).
-        public const string Phase = "3d";
+        public const string Phase = "3e";
 
         internal static Plugin Instance;
         internal static ManualLogSource Log;
@@ -40,6 +40,9 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedNormal;
         internal static ConfigEntry<string> SelectedOcclusion;
         internal static ConfigEntry<string> SelectedHeight;
+        internal static ConfigEntry<string> SelectedSpecular;
+        internal static ConfigEntry<bool> AutoApply;
+        internal static ConfigEntry<float> SpecularGain;
         internal static ConfigEntry<float> NormalStrength;
         internal static ConfigEntry<bool> FlipNormalGreen;
         internal static ConfigEntry<bool> RebuildNormalZ;
@@ -90,6 +93,28 @@ namespace SP2TextureMod
                 "File name of the occlusion map; 'auto' = the one named like the albedo image with _ao, _occ, _occlusion...; 'none' = none (set by the panel).");
             SelectedHeight = Config.Bind("Maps", "SelectedHeight", "auto",
                 "File name of the height (bump) map; 'auto' = the one named like the albedo image with _h, _height, _bump...; 'none' = none (set by the panel).");
+            SelectedSpecular = Config.Bind("Maps", "SelectedSpecular", "auto",
+                "File name of the specular map; 'auto' = the one named like the albedo image with _n_s, _s, _spec, _specular...; 'none' = none (set by the panel). "
+                + "The part shader has no specular map, so only the average of the image is used (see SpecularGain).");
+            SpecularGain = Config.Bind("Maps", "SpecularGain", 2f,
+                new ConfigDescription("How much the average brightness of the specular map adds to the smoothness (smoothness = Smoothness + average x this). "
+                    + "0 ignores the specular map.", new AcceptableValueRange<float>(0f, 6f)));
+            AutoApply = Config.Bind("Craft", "AutoApply", true,
+                "A texture applied in the designer is saved for the craft (by its name). With this on, opening that craft in the designer, "
+                + "or flying it, puts the texture on again by itself.");
+            // The map names the mod looks for were extended (and an older version could save "none" by itself when
+            // stepping through the images): once, every map goes back to "auto".
+            ConfigEntry<int> mapChoiceVersion = Config.Bind("Maps", "ChoiceVersion", 0,
+                "Internal: lets the mod reset the map choices once when its naming rules change. Leave it.");
+            if (mapChoiceVersion.Value < 2)
+            {
+                SelectedNormal.Value = "auto";
+                SelectedOcclusion.Value = "auto";
+                SelectedHeight.Value = "auto";
+                SelectedSpecular.Value = "auto";
+                mapChoiceVersion.Value = 2;
+            }
+
             NormalStrength = Config.Bind("Maps", "NormalStrength", 1f,
                 new ConfigDescription("How strong the normal map is (the shader's bump scale).", new AcceptableValueRange<float>(0f, 3f)));
             FlipNormalGreen = Config.Bind("Maps", "FlipNormalGreen", false,
@@ -150,11 +175,40 @@ namespace SP2TextureMod
                 + (PanelKey.Value != Key.None ? ", or press " + PanelKey.Value : "") + ".");
         }
 
+        /// <summary>Changes a setting in memory without writing the configuration file (call SaveConfig once afterwards).</summary>
+        internal static void Set<T>(ConfigEntry<T> entry, T value)
+        {
+            ConfigFile file = entry.ConfigFile;
+            bool original = file.SaveOnConfigSet;
+            file.SaveOnConfigSet = false;
+            try
+            {
+                entry.Value = value;
+            }
+            finally
+            {
+                file.SaveOnConfigSet = original;
+            }
+        }
+
+        internal static void SaveConfig()
+        {
+            try
+            {
+                Instance.Config.Save();
+            }
+            catch (Exception ex)
+            {
+                Log.LogWarning("Couldn't save the settings: " + ex.Message);
+            }
+        }
+
         private void Update()
         {
             try
             {
                 AtlasApplier.Tick();
+                FlightApplier.Tick();
                 UI.TexturePanel.Tick();
 
                 Key key = PanelKey.Value;

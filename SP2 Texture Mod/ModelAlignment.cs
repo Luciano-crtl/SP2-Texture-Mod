@@ -96,6 +96,19 @@ namespace SP2TextureMod
             return result;
         }
 
+        /// <summary>An alignment taken from a model-to-craft matrix that was stored earlier (no search is done).</summary>
+        public static ModelAlignment FromMatrix(Matrix4x4 objToCraft)
+        {
+            ModelAlignment result = new ModelAlignment();
+            result.ObjToCraft = objToCraft;
+            result.CraftToObj = objToCraft.inverse;
+            result.Scale = objToCraft.MultiplyVector(Vector3.right).magnitude;
+            result.MeanDistance = 0f;
+            result.Score = 0f;
+            result.Summary = "stored alignment";
+            return result;
+        }
+
         /// <summary>
         /// Applies the manual correction from the settings on top of an automatic fit: rotation and scale
         /// about the craft's center, then a shift in meters.

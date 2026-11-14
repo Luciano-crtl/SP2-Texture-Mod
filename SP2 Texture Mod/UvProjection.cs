@@ -10,10 +10,36 @@ namespace SP2TextureMod
     internal static class UvProjection
     {
         /// <summary>
+        /// The matrix that takes points of a renderer's mesh to the aircraft's own space (the frame the model
+        /// alignment is stored in). It is built from the local poses of the transforms between the renderer and
+        /// the aircraft, like the game does for flight, so it gives the same answer in the designer and in
+        /// flight and does not depend on where the bodies have moved to. If the renderer is not below the
+        /// aircraft the world matrices are used instead.
+        /// </summary>
+        public static Matrix4x4 RendererToCraft(Transform rendererTransform, Transform craftRoot)
+        {
+            try
+            {
+                return Jundroo.Common.Utils.UnityTransformUtility.GetTargetToAncestorTransformMatrix(rendererTransform, craftRoot);
+            }
+            catch (System.Exception)
+            {
+                // Not below the aircraft (the helper throws), or the helper is missing in this game version.
+                return craftRoot.worldToLocalMatrix * rendererTransform.localToWorldMatrix;
+            }
+        }
+
+        /// <summary>
         /// UV0 from the vertex position in craft space: each vertex is projected along the axis its
         /// normal points to most (X, Y or Z), scaled by tilesPerMeter.
         /// </summary>
         public static void BoxProject(Mesh mesh, Transform rendererTransform, Transform craftRoot, float tilesPerMeter)
+        {
+            BoxProject(mesh, RendererToCraft(rendererTransform, craftRoot), tilesPerMeter);
+        }
+
+        /// <summary>The same, with the mesh-to-craft matrix already worked out.</summary>
+        public static void BoxProject(Mesh mesh, Matrix4x4 toCraft, float tilesPerMeter)
         {
             int count = mesh.vertexCount;
 
@@ -22,8 +48,6 @@ namespace SP2TextureMod
             mesh.GetVertices(vertices);
             mesh.GetNormals(normals);
             bool hasNormals = normals.Count == count;
-
-            Matrix4x4 toCraft = craftRoot.worldToLocalMatrix * rendererTransform.localToWorldMatrix;
 
             List<Vector2> uvs = new List<Vector2>(count);
             for (int i = 0; i < count; i++)
