@@ -374,6 +374,9 @@ namespace SP2TextureMod
                 a.RayStart = _options.RayStartMeters;
                 a.FacingWeight = _options.FacingWeightSquareMeters;
                 a.MaxDistance = _options.MaxDistanceMeters;
+                a.NeutralBeyond = _options.NeutralBeyondMeters;
+                a.NeutralU = _options.NeutralUv.x;
+                a.NeutralV = _options.NeutralUv.y;
             }
 
             a.Orientation = _fitChoice;
@@ -726,12 +729,27 @@ namespace SP2TextureMod
                 }
             }
 
+            // Vertices far from the model get a neutral color of the atlas (found once per image and model).
+            if (transfer && !deferred)
+            {
+                _options.NeutralBeyondMeters = 0f;
+                Vector2 neutral;
+                if (Plugin.NeutralFarVertices.Value && _model != null && _texture != null && UvNeutral.Find(_texture, _model, out neutral))
+                {
+                    _options.NeutralBeyondMeters = Plugin.MaxMatchDistance.Value;
+                    _options.NeutralUv = neutral;
+                    Plugin.Log.LogInfo(Tag + "vertices more than " + F(_options.NeutralBeyondMeters) + " m from the model get the neutral color at ("
+                        + F(neutral.x) + ", " + F(neutral.y) + ") of the image");
+                }
+            }
+
             // The coordinates of an earlier apply stay valid while the alignment and its options are the same
             // (changing the image or a map does not need them again).
             if (transfer)
             {
                 string signature = UvCache.MakeSignature(_modelPath, Plugin.FlipModelX.Value, _alignment.ObjToCraft, _normalsInverted,
-                    _frontFaces, _options.Project, _options.RayStartMeters, _options.FacingWeightSquareMeters, _options.MaxDistanceMeters);
+                    _frontFaces, _options.Project, _options.RayStartMeters, _options.FacingWeightSquareMeters, _options.MaxDistanceMeters,
+                    _options.NeutralBeyondMeters, _options.NeutralUv.x, _options.NeutralUv.y);
                 if (_uvCache == null || _uvCache.Signature != signature)
                 {
                     _uvCache = new UvCache(signature);
@@ -837,6 +855,11 @@ namespace SP2TextureMod
                 {
                     StatusAdd("Model faces", _facingShort);
                     StatusAdd("Match", Stats.MatchSummary() + (_cachedRenderers > 0 ? "; " + _cachedRenderers + " renderers from the saved ones" : ""));
+                    if (_options.NeutralBeyondMeters > 0f)
+                    {
+                        StatusAdd("Neutral color", Stats.Neutral + " vertices (" + F(100f * Stats.Neutral / Math.Max(1, Stats.Vertices)) + "%) have no counterpart");
+                    }
+
                     StatusAdd("Faces up", Stats.KindSummary(0));
                     StatusAdd("Faces down", Stats.KindSummary(1));
                     StatusAdd("Sideways", Stats.KindSummary(2));
@@ -1141,7 +1164,9 @@ namespace SP2TextureMod
                 MaxDistanceMeters = stored.MaxDistance,
                 FrontFacesOnly = _frontFaces,
                 FacingWeightSquareMeters = stored.FacingWeight,
-                FarLimitMeters = stored.MaxDistance
+                FarLimitMeters = stored.MaxDistance,
+                NeutralBeyondMeters = stored.NeutralBeyond,
+                NeutralUv = new Vector2(stored.NeutralU, stored.NeutralV)
             };
         }
 

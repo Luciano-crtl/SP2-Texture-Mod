@@ -42,6 +42,7 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedHeight;
         internal static ConfigEntry<string> SelectedSpecular;
         internal static ConfigEntry<bool> AutoApply;
+        internal static ConfigEntry<bool> NeutralFarVertices;
         internal static ConfigEntry<string> SelectedSet;
         internal static ConfigEntry<string> SelectedMetalness;
         internal static ConfigEntry<string> SelectedRoughness;
@@ -157,6 +158,9 @@ namespace SP2TextureMod
             FacingWeight = Config.Bind("Model", "FacingWeight", 0.03f,
                 new ConfigDescription("Nearest-surface search and ray fallback: how strongly a point prefers model surfaces that face the same way (square meters). Keep it small: a large value picks far away surfaces.",
                     new AcceptableValueRange<float>(0f, 1f)));
+            NeutralFarVertices = Config.Bind("Model", "NeutralFarVertices", true,
+                "Vertices of the craft that are farther than MaxMatchDistance from the model (a part the model does not have, or has elsewhere) "
+                + "get a neutral color of the texture instead of whatever surface of the model was nearest, which looks like scrambled streaks.");
             MaxMatchDistance = Config.Bind("Model", "MaxMatchDistance", 0.75f,
                 new ConfigDescription("Vertices farther than this from the model are only counted in the log statistics (meters).",
                     new AcceptableValueRange<float>(0.01f, 50f)));

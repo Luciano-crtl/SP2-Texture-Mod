@@ -44,6 +44,9 @@ namespace SP2TextureMod
         public float RayStart = 0.3f;
         public float FacingWeight = 0.03f;
         public float MaxDistance = 0.75f;
+        public float NeutralBeyond;   // vertices farther than this from the model get a neutral color (0 = off)
+        public float NeutralU;
+        public float NeutralV;
         public int Orientation;
         public Vector3 Offset;
         public Vector3 Rotation;
@@ -158,6 +161,9 @@ namespace SP2TextureMod
                 a.RayStart = Number(values, "rayStart", 0.3f);
                 a.FacingWeight = Number(values, "facingWeight", 0.03f);
                 a.MaxDistance = Number(values, "maxDistance", 0.75f);
+                a.NeutralBeyond = Number(values, "neutralBeyond", 0f);
+                a.NeutralU = Number(values, "neutralU", 0f);
+                a.NeutralV = Number(values, "neutralV", 0f);
                 a.Orientation = (int)Number(values, "orientation", 0f);
                 a.Offset = ReadVector(values, "offset", Vector3.zero);
                 a.Rotation = ReadVector(values, "rotation", Vector3.zero);
@@ -256,6 +262,9 @@ namespace SP2TextureMod
                 Put(sb, "rayStart", N(RayStart));
                 Put(sb, "facingWeight", N(FacingWeight));
                 Put(sb, "maxDistance", N(MaxDistance));
+                Put(sb, "neutralBeyond", N(NeutralBeyond));
+                Put(sb, "neutralU", N(NeutralU));
+                Put(sb, "neutralV", N(NeutralV));
                 Put(sb, "orientation", Orientation.ToString(CultureInfo.InvariantCulture));
                 Put(sb, "offset", V(Offset));
                 Put(sb, "rotation", V(Rotation));
@@ -339,6 +348,7 @@ namespace SP2TextureMod
             Plugin.Set(Plugin.RayStart, RayStart);
             Plugin.Set(Plugin.FacingWeight, FacingWeight);
             Plugin.Set(Plugin.MaxMatchDistance, MaxDistance);
+            Plugin.Set(Plugin.NeutralFarVertices, NeutralBeyond > 0f);
             Plugin.Set(Plugin.AdjustOffsetX, Offset.x);
             Plugin.Set(Plugin.AdjustOffsetY, Offset.y);
             Plugin.Set(Plugin.AdjustOffsetZ, Offset.z);

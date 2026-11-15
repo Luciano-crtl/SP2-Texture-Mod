@@ -312,7 +312,9 @@ namespace SP2TextureMod
                     MaxDistanceMeters = a.MaxDistance,
                     FrontFacesOnly = a.FrontFaces,
                     FacingWeightSquareMeters = a.FacingWeight,
-                    FarLimitMeters = a.MaxDistance
+                    FarLimitMeters = a.MaxDistance,
+                    NeutralBeyondMeters = a.NeutralBeyond,
+                    NeutralUv = new Vector2(a.NeutralU, a.NeutralV)
                 };
             }
 

@@ -297,6 +297,18 @@ namespace SP2TextureMod.UI
                     AtlasApplier.ReapplyIfActive();
                 });
 
+            builder.Toggle("Neutral color for parts far from the model",
+                "Vertices farther than the maximum match distance from the model (parts the model does not have, or has elsewhere) get an average color of the texture instead of scrambled streaks.",
+                Plugin.NeutralFarVertices.Value,
+                on =>
+                {
+                    SetValue(Plugin.NeutralFarVertices, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            FloatSetting(Plugin.MaxMatchDistance, "Maximum match distance",
+                "Vertices farther than this from the model count as having no counterpart (see the neutral color option).",
+                0.05f, 0.05f, 3f, " m", AtlasApplier.ReapplyIfActive);
             FloatSetting(Plugin.RayStart, "Ray start distance",
                 "How far outside the craft's surface the rays start. It must be more than the craft sticks out of the model anywhere.",
                 0.01f, 0.02f, 1.5f, " m", AtlasApplier.ReapplyIfActive);

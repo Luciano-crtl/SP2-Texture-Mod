@@ -35,6 +35,16 @@ namespace SP2TextureMod
 
             /// <summary>Distance beyond which a match is counted as "far" in the statistics (meters).</summary>
             public float FarLimitMeters;
+
+            /// <summary>
+            /// A vertex whose match is farther than this from it (meters) has no counterpart on the model (a part the model
+            /// does not have, or has elsewhere): it gets NeutralUv instead of the coordinates of whatever surface was nearest.
+            /// 0 = off.
+            /// </summary>
+            public float NeutralBeyondMeters;
+
+            /// <summary>A place of the atlas with an average color.</summary>
+            public Vector2 NeutralUv;
         }
 
         internal struct DebugPoint
@@ -49,6 +59,7 @@ namespace SP2TextureMod
             public long Vertices;
             public long Rays;
             public long Far;
+            public long Neutral;
             public double SumDistance;
             public float MaxDistance;
             public readonly long[] Count = new long[3];
@@ -67,6 +78,7 @@ namespace SP2TextureMod
                 Vertices = 0;
                 Rays = 0;
                 Far = 0;
+                Neutral = 0;
                 SumDistance = 0;
                 MaxDistance = 0f;
                 for (int i = 0; i < 3; i++)
@@ -221,13 +233,22 @@ namespace SP2TextureMod
                 }
 
                 Vector2 uv = u * model.UvA[triangle] + v * model.UvB[triangle] + w * model.UvC[triangle];
-                uvs.Add(uv);
-                stats.TrackUv(uv);
 
-                // Statistics: where the match landed relative to the vertex.
+                // Where the match landed relative to the vertex.
                 Vector3 matchObj = u * model.A[triangle] + v * model.B[triangle] + w * model.C[triangle];
                 Vector3 matchCraft = objToCraft.MultiplyPoint3x4(matchObj);
                 float meters = (matchCraft - pCraft).magnitude;
+                if (options.NeutralBeyondMeters > 0f && meters > options.NeutralBeyondMeters)
+                {
+                    uv = options.NeutralUv;
+                    stats.Neutral++;
+                }
+                else
+                {
+                    stats.TrackUv(uv);
+                }
+
+                uvs.Add(uv);
                 int kind = nCraft.y > 0.6f ? 0 : (nCraft.y < -0.6f ? 1 : 2);
 
                 stats.Vertices++;

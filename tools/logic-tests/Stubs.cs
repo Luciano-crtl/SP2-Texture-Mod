@@ -105,7 +105,7 @@ namespace SP2TextureMod
             NormalStrength = new ConfigEntry<float>(1f), BumpStrength = new ConfigEntry<float>(3f), OcclusionStrength = new ConfigEntry<float>(1f), ParallaxHeight = new ConfigEntry<float>(0f),
             Metallic = new ConfigEntry<float>(0f), Smoothness = new ConfigEntry<float>(0f), SpecularGain = new ConfigEntry<float>(2f);
         public static ConfigEntry<bool> FlipModelX = new ConfigEntry<bool>(true), ProjectAlongNormals = new ConfigEntry<bool>(true), FlipNormalGreen = new ConfigEntry<bool>(false),
-            RebuildNormalZ = new ConfigEntry<bool>(true), HeightToNormal = new ConfigEntry<bool>(false), UseParallax = new ConfigEntry<bool>(false), UseLitShader = new ConfigEntry<bool>(false);
+            RebuildNormalZ = new ConfigEntry<bool>(true), HeightToNormal = new ConfigEntry<bool>(false), UseParallax = new ConfigEntry<bool>(false), UseLitShader = new ConfigEntry<bool>(false), NeutralFarVertices = new ConfigEntry<bool>(true);
         public static void Set<T>(ConfigEntry<T> entry, T value) { entry.Value = value; }
         public static void SaveConfig() { }
     }

@@ -48,7 +48,8 @@ namespace SP2TextureMod
 
         /// <summary>Everything the coordinates depend on, as one short text.</summary>
         public static string MakeSignature(string modelPath, bool flipX, Matrix4x4 objToCraft, bool normalsInverted,
-            bool frontFaces, bool project, float rayStart, float facingWeight, float maxDistance)
+            bool frontFaces, bool project, float rayStart, float facingWeight, float maxDistance,
+            float neutralBeyond = 0f, float neutralU = 0f, float neutralV = 0f)
         {
             StringBuilder sb = new StringBuilder();
             sb.Append("v").Append(AlgorithmVersion).Append('|');
@@ -65,6 +66,11 @@ namespace SP2TextureMod
 
             sb.Append('|').Append(flipX ? 1 : 0).Append(normalsInverted ? 1 : 0).Append(frontFaces ? 1 : 0).Append(project ? 1 : 0);
             sb.Append('|').Append(F(rayStart)).Append(',').Append(F(facingWeight)).Append(',').Append(F(maxDistance)).Append('|');
+            if (neutralBeyond > 0f)
+            {
+                sb.Append("n").Append(F(neutralBeyond)).Append(',').Append(F(neutralU)).Append(',').Append(F(neutralV)).Append('|');
+            }
+
             for (int i = 0; i < 16; i++)
             {
                 sb.Append(F(objToCraft[i])).Append(',');
@@ -77,7 +83,7 @@ namespace SP2TextureMod
         public static string MakeSignature(string modelPath, CraftAssignment a)
         {
             return MakeSignature(modelPath, a.FlipModelX, a.ObjToCraft, a.NormalsInverted, a.FrontFaces, a.Project,
-                a.RayStart, a.FacingWeight, a.MaxDistance);
+                a.RayStart, a.FacingWeight, a.MaxDistance, a.NeutralBeyond, a.NeutralU, a.NeutralV);
         }
 
         /// <summary>Writes the stored coordinates of this renderer into the mesh. False if there are none for this exact mesh.</summary>
