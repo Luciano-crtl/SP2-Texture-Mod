@@ -314,6 +314,7 @@ namespace SP2TextureMod
                     FacingWeightSquareMeters = a.FacingWeight,
                     FarLimitMeters = a.MaxDistance,
                     NeutralBeyondMeters = a.NeutralBeyond,
+                    PartRefineMeters = a.PartRefine,
                     NeutralUv = new Vector2(a.NeutralU, a.NeutralV)
                 };
             }

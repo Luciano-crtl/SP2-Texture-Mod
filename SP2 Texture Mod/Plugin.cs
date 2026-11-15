@@ -43,6 +43,8 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedSpecular;
         internal static ConfigEntry<bool> AutoApply;
         internal static ConfigEntry<bool> NeutralFarVertices;
+        internal static ConfigEntry<bool> RefineEachPart;
+        internal static ConfigEntry<float> PartRefineMaxShift;
         internal static ConfigEntry<string> SelectedSet;
         internal static ConfigEntry<string> SelectedMetalness;
         internal static ConfigEntry<string> SelectedRoughness;
@@ -161,6 +163,12 @@ namespace SP2TextureMod
             NeutralFarVertices = Config.Bind("Model", "NeutralFarVertices", true,
                 "Vertices of the craft that are farther than MaxMatchDistance from the model (a part the model does not have, or has elsewhere) "
                 + "get a neutral color of the texture instead of whatever surface of the model was nearest, which looks like scrambled streaks.");
+            RefineEachPart = Config.Bind("Model", "RefineEachPart", true,
+                "After the alignment of the whole craft, every piece of the craft (a wing, a fuselage section) is moved and stretched a little so that it lies "
+                + "closer to the model, which helps when the craft's proportions differ a little from the model's.");
+            PartRefineMaxShift = Config.Bind("Model", "PartRefineMaxShift", 0.5f,
+                new ConfigDescription("The most a single piece may be moved by that correction (meters).",
+                    new AcceptableValueRange<float>(0.05f, 5f)));
             MaxMatchDistance = Config.Bind("Model", "MaxMatchDistance", 0.75f,
                 new ConfigDescription("Vertices farther than this from the model are only counted in the log statistics (meters).",
                     new AcceptableValueRange<float>(0.01f, 50f)));

@@ -297,6 +297,19 @@ namespace SP2TextureMod.UI
                     AtlasApplier.ReapplyIfActive();
                 });
 
+            builder.Toggle("Fit each part to the model",
+                "After the alignment of the whole craft, every piece is moved and stretched a little (within the limit below) to lie closer to the model.",
+                Plugin.RefineEachPart.Value,
+                on =>
+                {
+                    SetValue(Plugin.RefineEachPart, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
+            FloatSetting(Plugin.PartRefineMaxShift, "Largest move per part",
+                "The most a single piece may be moved when fitting each part to the model.",
+                0.05f, 0.05f, 3f, " m", AtlasApplier.ReapplyIfActive);
+
             builder.Toggle("Neutral color for parts far from the model",
                 "Vertices farther than the maximum match distance from the model (parts the model does not have, or has elsewhere) get an average color of the texture instead of scrambled streaks.",
                 Plugin.NeutralFarVertices.Value,

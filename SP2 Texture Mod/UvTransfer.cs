@@ -45,6 +45,12 @@ namespace SP2TextureMod
 
             /// <summary>A place of the atlas with an average color.</summary>
             public Vector2 NeutralUv;
+
+            /// <summary>
+            /// Largest shift (meters) the correction of a single renderer may have (see PartRefinement). 0 = every renderer
+            /// uses the alignment of the whole craft as it is.
+            /// </summary>
+            public float PartRefineMeters;
         }
 
         internal struct DebugPoint
@@ -60,6 +66,11 @@ namespace SP2TextureMod
             public long Rays;
             public long Far;
             public long Neutral;
+            public long RefinedRenderers;
+            public long Renderers;
+            public double SumRefineShift;
+            public double SumBeforeRefine;
+            public double SumAfterRefine;
             public double SumDistance;
             public float MaxDistance;
             public readonly long[] Count = new long[3];
@@ -79,6 +90,11 @@ namespace SP2TextureMod
                 Rays = 0;
                 Far = 0;
                 Neutral = 0;
+                RefinedRenderers = 0;
+                Renderers = 0;
+                SumRefineShift = 0;
+                SumBeforeRefine = 0;
+                SumAfterRefine = 0;
                 SumDistance = 0;
                 MaxDistance = 0f;
                 for (int i = 0; i < 3; i++)
@@ -112,6 +128,23 @@ namespace SP2TextureMod
                 }
 
                 return "ray " + F(100.0 * Rays / Vertices) + "%, mean " + F(SumDistance / Vertices) + " m, max " + F(MaxDistance) + " m";
+            }
+
+            /// <summary>"120 of 240 renderers moved, mean shift 0.21 m, distance 0.62 -> 0.31 m".</summary>
+            public string RefineSummary()
+            {
+                if (Renderers == 0)
+                {
+                    return "-";
+                }
+
+                if (RefinedRenderers == 0)
+                {
+                    return "none of " + Renderers + " renderers needed a correction";
+                }
+
+                return RefinedRenderers + " of " + Renderers + " renderers moved, mean shift " + F(SumRefineShift / RefinedRenderers)
+                    + " m, distance of those " + F(SumBeforeRefine / RefinedRenderers) + " -> " + F(SumAfterRefine / RefinedRenderers) + " m";
             }
 
             public string UvRangeSummary()
@@ -199,11 +232,43 @@ namespace SP2TextureMod
             float rayRangeObj = (options.RayStartMeters + options.MaxDistanceMeters) / scale;
             float weightObj = options.FacingWeightSquareMeters / (scale * scale);
 
+            // The craft-space position of every vertex, then the correction of this renderer (if enabled).
+            List<Vector3> craftVertices = new List<Vector3>(count);
+            for (int i = 0; i < count; i++)
+            {
+                craftVertices.Add(toCraft.MultiplyPoint3x4(vertices[i]));
+            }
+
+            PartRefinement.Correction correction = PartRefinement.Correction.None;
+            if (options.PartRefineMeters > 0f)
+            {
+                correction = PartRefinement.Fit(craftVertices, bvh, alignment, options.PartRefineMeters);
+                stats.Renderers++;
+                if (correction.Moved)
+                {
+                    stats.RefinedRenderers++;
+                    stats.SumRefineShift += correction.Shift.magnitude;
+                    stats.SumBeforeRefine += correction.Before;
+                    stats.SumAfterRefine += correction.After;
+                }
+            }
+
+            bool corrected = correction.Moved;
+
             List<Vector2> uvs = new List<Vector2>(count);
             for (int i = 0; i < count; i++)
             {
-                Vector3 pCraft = toCraft.MultiplyPoint3x4(vertices[i]);
+                Vector3 pCraft = craftVertices[i];
                 Vector3 nCraft = hasNormals ? toCraft.MultiplyVector(normals[i]).normalized : Vector3.zero;
+                if (corrected)
+                {
+                    pCraft = correction.Apply(pCraft);
+                    if (hasNormals)
+                    {
+                        nCraft = correction.ApplyNormal(nCraft);
+                    }
+                }
+
                 Vector3 p = craftToObj.MultiplyPoint3x4(pCraft);
                 Vector3 n = hasNormals ? craftToObj.MultiplyVector(nCraft).normalized : Vector3.zero;
 

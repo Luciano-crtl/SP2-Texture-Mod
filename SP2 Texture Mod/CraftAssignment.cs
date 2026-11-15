@@ -45,6 +45,7 @@ namespace SP2TextureMod
         public float FacingWeight = 0.03f;
         public float MaxDistance = 0.75f;
         public float NeutralBeyond;   // vertices farther than this from the model get a neutral color (0 = off)
+        public float PartRefine;      // largest per-renderer correction in meters (0 = off)
         public float NeutralU;
         public float NeutralV;
         public int Orientation;
@@ -162,6 +163,7 @@ namespace SP2TextureMod
                 a.FacingWeight = Number(values, "facingWeight", 0.03f);
                 a.MaxDistance = Number(values, "maxDistance", 0.75f);
                 a.NeutralBeyond = Number(values, "neutralBeyond", 0f);
+                a.PartRefine = Number(values, "partRefine", 0f);
                 a.NeutralU = Number(values, "neutralU", 0f);
                 a.NeutralV = Number(values, "neutralV", 0f);
                 a.Orientation = (int)Number(values, "orientation", 0f);
@@ -263,6 +265,7 @@ namespace SP2TextureMod
                 Put(sb, "facingWeight", N(FacingWeight));
                 Put(sb, "maxDistance", N(MaxDistance));
                 Put(sb, "neutralBeyond", N(NeutralBeyond));
+                Put(sb, "partRefine", N(PartRefine));
                 Put(sb, "neutralU", N(NeutralU));
                 Put(sb, "neutralV", N(NeutralV));
                 Put(sb, "orientation", Orientation.ToString(CultureInfo.InvariantCulture));
@@ -349,6 +352,11 @@ namespace SP2TextureMod
             Plugin.Set(Plugin.FacingWeight, FacingWeight);
             Plugin.Set(Plugin.MaxMatchDistance, MaxDistance);
             Plugin.Set(Plugin.NeutralFarVertices, NeutralBeyond > 0f);
+            Plugin.Set(Plugin.RefineEachPart, PartRefine > 0f);
+            if (PartRefine > 0f)
+            {
+                Plugin.Set(Plugin.PartRefineMaxShift, PartRefine);
+            }
             Plugin.Set(Plugin.AdjustOffsetX, Offset.x);
             Plugin.Set(Plugin.AdjustOffsetY, Offset.y);
             Plugin.Set(Plugin.AdjustOffsetZ, Offset.z);

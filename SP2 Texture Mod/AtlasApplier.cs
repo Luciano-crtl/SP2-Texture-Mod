@@ -375,6 +375,7 @@ namespace SP2TextureMod
                 a.FacingWeight = _options.FacingWeightSquareMeters;
                 a.MaxDistance = _options.MaxDistanceMeters;
                 a.NeutralBeyond = _options.NeutralBeyondMeters;
+                a.PartRefine = _options.PartRefineMeters;
                 a.NeutralU = _options.NeutralUv.x;
                 a.NeutralV = _options.NeutralUv.y;
             }
@@ -732,6 +733,7 @@ namespace SP2TextureMod
             // Vertices far from the model get a neutral color of the atlas (found once per image and model).
             if (transfer && !deferred)
             {
+                _options.PartRefineMeters = Plugin.RefineEachPart.Value ? Plugin.PartRefineMaxShift.Value : 0f;
                 _options.NeutralBeyondMeters = 0f;
                 Vector2 neutral;
                 if (Plugin.NeutralFarVertices.Value && _model != null && _texture != null && UvNeutral.Find(_texture, _model, out neutral))
@@ -749,7 +751,7 @@ namespace SP2TextureMod
             {
                 string signature = UvCache.MakeSignature(_modelPath, Plugin.FlipModelX.Value, _alignment.ObjToCraft, _normalsInverted,
                     _frontFaces, _options.Project, _options.RayStartMeters, _options.FacingWeightSquareMeters, _options.MaxDistanceMeters,
-                    _options.NeutralBeyondMeters, _options.NeutralUv.x, _options.NeutralUv.y);
+                    _options.NeutralBeyondMeters, _options.NeutralUv.x, _options.NeutralUv.y, _options.PartRefineMeters);
                 if (_uvCache == null || _uvCache.Signature != signature)
                 {
                     _uvCache = new UvCache(signature);
@@ -858,6 +860,11 @@ namespace SP2TextureMod
                     if (_options.NeutralBeyondMeters > 0f)
                     {
                         StatusAdd("Neutral color", Stats.Neutral + " vertices (" + F(100f * Stats.Neutral / Math.Max(1, Stats.Vertices)) + "%) have no counterpart");
+                    }
+
+                    if (_options.PartRefineMeters > 0f && Stats.Renderers > 0)
+                    {
+                        StatusAdd("Per-part fit", Stats.RefineSummary());
                     }
 
                     StatusAdd("Faces up", Stats.KindSummary(0));
@@ -1173,6 +1180,7 @@ namespace SP2TextureMod
                 FacingWeightSquareMeters = stored.FacingWeight,
                 FarLimitMeters = stored.MaxDistance,
                 NeutralBeyondMeters = stored.NeutralBeyond,
+                PartRefineMeters = stored.PartRefine,
                 NeutralUv = new Vector2(stored.NeutralU, stored.NeutralV)
             };
         }
