@@ -57,6 +57,7 @@ namespace SP2TextureMod
         public float Smoothness;
         public float SpecularAverage;
         public float SpecularGain = 2f;
+        public int SpecularKind; // AtlasMaterial.SpecularKind: how the average of the "specular" image is used
 
         // The size of the craft when the alignment was made (to notice that the craft changed since).
         public bool HasBounds;
@@ -164,6 +165,7 @@ namespace SP2TextureMod
                 a.Smoothness = Number(values, "smoothness", 0f);
                 a.SpecularAverage = Number(values, "specularAverage", 0f);
                 a.SpecularGain = Number(values, "specularGain", 2f);
+                a.SpecularKind = (int)Number(values, "specularKind", 0f);
 
                 string boundsCenter;
                 string boundsSize;
@@ -256,6 +258,7 @@ namespace SP2TextureMod
                 Put(sb, "smoothness", N(Smoothness));
                 Put(sb, "specularAverage", N(SpecularAverage));
                 Put(sb, "specularGain", N(SpecularGain));
+                Put(sb, "specularKind", SpecularKind.ToString(CultureInfo.InvariantCulture));
 
                 if (HasBounds)
                 {

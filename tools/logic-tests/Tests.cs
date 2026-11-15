@@ -234,12 +234,23 @@ internal static class Program
         Check(m != null && error == null, "a hand-made OBJ is read (" + error + ")");
         if (m != null)
         {
-            Check(m.TriangleCount == 4, "a quad gives two triangles, plus two more faces (got " + m.TriangleCount + ")");
+            Check(m.TriangleCount == 3, "a quad gives two triangles, the face without texture coordinates is left out, the last one is kept (got " + m.TriangleCount + ")");
             Check(m.A[0].x == 0 && m.B[0].x == 1.5f && m.C[0].x == 1.5f && Math.Abs(m.C[0].y + 0.25f) < 1e-6f && m.C[0].z == 3f, "numbers with exponents and signs");
             Check(m.UvA[0].x == 0.2f && m.UvB[0].x == 0.8f && m.UvC[0].y == 0.7f, "texture coordinates of the first triangle");
-            Check(m.UvA[2].x == 0f && m.UvA[2].y == 0f, "a corner without a texture coordinate gets zero");
-            Check(m.A[3].x == 0f && m.B[3].x == 1.5f, "negative indices count from the end of the list read so far");
+            Check(m.A[2].x == 0f && m.B[2].x == 1.5f && m.UvB[2].x == 0.8f, "negative indices count from the end of the list read so far");
         }
+
+        // Mostly no texture coordinates: refused with the numbers; no vt at all: refused; some objects without: left out.
+        File.WriteAllText(Path.Combine(dir, "few.obj"), "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\n"
+            + "f 1/1 2/2 3/3\nf 1//1 2//1 3//1\nf 1 2 3\nf 1 2 3\nf 1 2 3\nf 1 2 3\nf 1 2 3\nf 1 2 3\nf 1 2 3\nf 1 2 3\n");
+        ObjModel few = ObjModel.Load(Path.Combine(dir, "few.obj"), false, out error);
+        Check(few == null && error.Contains("only 1 of 10"), "a file where almost no face has texture coordinates is refused with the numbers (" + error + ")");
+        File.WriteAllText(Path.Combine(dir, "novt.obj"), "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        Check(ObjModel.Load(Path.Combine(dir, "novt.obj"), false, out error) == null && error.Contains("no texture coordinates"), "a file without vt is refused");
+        File.WriteAllText(Path.Combine(dir, "half.obj"), "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\n"
+            + "f 1/1 2/2 3/3\nf 1/1 2/2 3/3\nf 1 2 3\nf 1 2 3\n");
+        ObjModel half = ObjModel.Load(Path.Combine(dir, "half.obj"), false, out error);
+        Check(half != null && half.TriangleCount == 2, "triangles without texture coordinates are left out when enough have them");
 
         // The same file mirrored on X swaps two corners and negates x.
         ObjModel mirrored = ObjModel.Load(path, true, out error);

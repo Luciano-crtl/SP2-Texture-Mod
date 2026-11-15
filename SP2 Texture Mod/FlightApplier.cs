@@ -354,8 +354,12 @@ namespace SP2TextureMod
             s.Look.NormalStrength = a.NormalStrength;
             s.Look.OcclusionStrength = a.OcclusionStrength;
             s.Look.ParallaxHeight = a.ParallaxHeight;
-            s.Look.Metallic = a.Metallic;
-            s.Look.Smoothness = AtlasMaterial.EffectiveSmoothness(a.Smoothness, a.SpecularAverage, a.SpecularGain);
+            float metallic = a.Metallic;
+            float smoothness = a.Smoothness;
+            AtlasMaterial.FromSpecularMap((AtlasMaterial.SpecularKind)a.SpecularKind, a.SpecularAverage, a.SpecularGain,
+                a.Specular.Length > 0, ref metallic, ref smoothness);
+            s.Look.Metallic = metallic;
+            s.Look.Smoothness = smoothness;
 
             s.Material = AtlasMaterial.Create(theme, s.Look);
             if (s.Material == null)

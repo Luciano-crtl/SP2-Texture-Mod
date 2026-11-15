@@ -57,7 +57,7 @@ namespace SP2TextureMod
             new[] { "_n_n", "_n", "_nrm", "_nm", "_normal", "_normals", "_norm" }, () => Plugin.SelectedNormal);
         public static readonly MapSlot Occlusion = new MapSlot("Occlusion map",
             new[] { "_n_ao", "_ao", "_occ", "_occlusion", "_ambientocclusion" }, () => Plugin.SelectedOcclusion);
-        public static readonly MapSlot Specular = new MapSlot("Specular map",
+        public static readonly MapSlot Specular = new MapSlot("Specular / metalness / roughness map",
             new[] { "_n_s", "_s", "_spec", "_specular", "_gloss", "_smoothness", "_metallic" }, () => Plugin.SelectedSpecular);
         public static readonly MapSlot Height = new MapSlot("Height (bump) map",
             new[] { "_h", "_height", "_disp", "_displacement", "_bump", "_parallax" }, () => Plugin.SelectedHeight);

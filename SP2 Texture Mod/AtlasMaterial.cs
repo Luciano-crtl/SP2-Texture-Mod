@@ -168,13 +168,54 @@ namespace SP2TextureMod
             return theme.Theme.GetMaterialIndex(reserved.Id);
         }
 
-        /// <summary>
-        /// The part shader has no specular map. The average of the specular image is added to the smoothness,
-        /// which is a single value for the whole material.
-        /// </summary>
-        public static float EffectiveSmoothness(float smoothness, float specularAverage, float gain)
+        /// <summary>What the image chosen in the "specular" slot is: its file name tells (metalnessMap1.png, _roughness...).</summary>
+        public enum SpecularKind
         {
-            return Mathf.Clamp01(smoothness + Mathf.Max(0f, specularAverage) * Mathf.Max(0f, gain));
+            Specular = 0,
+            Metalness = 1,
+            Gloss = 2,
+            Roughness = 3
+        }
+
+        public static SpecularKind KindOf(string fileName)
+        {
+            string name = (fileName ?? "").ToLowerInvariant();
+            if (name.Contains("metal")) return SpecularKind.Metalness;
+            if (name.Contains("rough")) return SpecularKind.Roughness;
+            if (name.Contains("gloss") || name.Contains("smooth")) return SpecularKind.Gloss;
+            return SpecularKind.Specular;
+        }
+
+        /// <summary>
+        /// The part shader has no specular, metalness, roughness or smoothness map: only one value of each for the
+        /// whole material. The average of the image moves the matching value: a specular image (times the gain) or a
+        /// gloss image adds to the smoothness, a roughness image adds 1 - average to it, a metalness image adds to the
+        /// metallic. Both results stay between 0 and 1.
+        /// </summary>
+        public static void FromSpecularMap(SpecularKind kind, float average, float gain, bool hasMap,
+            ref float metallic, ref float smoothness)
+        {
+            if (!hasMap)
+            {
+                return;
+            }
+
+            average = Mathf.Clamp01(average);
+            switch (kind)
+            {
+                case SpecularKind.Metalness:
+                    metallic = Mathf.Clamp01(metallic + average);
+                    break;
+                case SpecularKind.Gloss:
+                    smoothness = Mathf.Clamp01(smoothness + average);
+                    break;
+                case SpecularKind.Roughness:
+                    smoothness = Mathf.Clamp01(smoothness + 1f - average);
+                    break;
+                default:
+                    smoothness = Mathf.Clamp01(smoothness + average * Mathf.Max(0f, gain));
+                    break;
+            }
         }
 
         private static void SetMap(Material material, string keyword, int propertyId, Texture2D texture)

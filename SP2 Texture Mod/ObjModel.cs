@@ -60,8 +60,36 @@ namespace SP2TextureMod
                 return null;
             }
 
-            Parse(data, positions, uvs, ta, tb, tc, ua, ub, uc, flipX, ref badLines, ref cornersWithoutUv);
+            List<bool> complete = new List<bool>();
+            Parse(data, positions, uvs, ta, tb, tc, ua, ub, uc, complete, flipX, ref badLines, ref cornersWithoutUv);
             data = null;
+
+            // Many faces without texture coordinates: read the file again with the first (slow) reader, to tell a file that
+            // really lacks them from a mistake of the fast reader. If they disagree the slow one is used.
+            if (ta.Count > 0 && cornersWithoutUv > ta.Count)
+            {
+                List<Vector3> sPositions = new List<Vector3>();
+                List<Vector2> sUvs = new List<Vector2>();
+                List<Vector3> sa = new List<Vector3>();
+                List<Vector3> sb = new List<Vector3>();
+                List<Vector3> sc = new List<Vector3>();
+                List<Vector2> sua = new List<Vector2>();
+                List<Vector2> sub = new List<Vector2>();
+                List<Vector2> suc = new List<Vector2>();
+                List<bool> sComplete = new List<bool>();
+                int sBad = 0;
+                int sWithout = 0;
+                ParseSlow(path, sPositions, sUvs, sa, sb, sc, sua, sub, suc, sComplete, flipX, ref sBad, ref sWithout);
+                Plugin.Log.LogInfo("[OBJ] " + Path.GetFileName(path) + ": fast reader " + positions.Count + " vertices, " + uvs.Count + " vt, "
+                    + ta.Count + " triangles, " + cornersWithoutUv + " corners without a vt; slow reader " + sPositions.Count + " vertices, "
+                    + sUvs.Count + " vt, " + sa.Count + " triangles, " + sWithout + " corners without a vt");
+                if (sWithout < cornersWithoutUv || sUvs.Count != uvs.Count)
+                {
+                    Plugin.Log.LogWarning("[OBJ] the two readers disagree: using the slow one");
+                    positions = sPositions; uvs = sUvs; ta = sa; tb = sb; tc = sc; ua = sua; ub = sub; uc = suc;
+                    complete = sComplete; badLines = sBad; cornersWithoutUv = sWithout;
+                }
+            }
 
             if (ta.Count == 0)
             {
@@ -75,10 +103,36 @@ namespace SP2TextureMod
                 return null;
             }
 
-            if (cornersWithoutUv > ta.Count)
+            // Triangles without texture coordinates (other objects of the file: glass, wheels, a cockpit...) are left out;
+            // the model is useless only when almost none has them.
+            int withUv = 0;
+            for (int i = 0; i < complete.Count; i++)
             {
-                error = "most faces have no texture coordinates; export the OBJ with UVs";
+                if (complete[i]) withUv++;
+            }
+
+            if (withUv == 0 || withUv < 0.2 * ta.Count)
+            {
+                error = "only " + withUv + " of " + ta.Count + " triangles have texture coordinates (the file has " + uvs.Count
+                    + " vt lines); export the OBJ with UVs";
                 return null;
+            }
+
+            if (withUv < ta.Count)
+            {
+                Plugin.Log.LogWarning("[OBJ] " + Path.GetFileName(path) + ": " + (ta.Count - withUv) + " of " + ta.Count
+                    + " triangles have no texture coordinates and were left out (probably other objects of the file)");
+                int kept = 0;
+                for (int i = 0; i < ta.Count; i++)
+                {
+                    if (!complete[i]) continue;
+                    ta[kept] = ta[i]; tb[kept] = tb[i]; tc[kept] = tc[i];
+                    ua[kept] = ua[i]; ub[kept] = ub[i]; uc[kept] = uc[i];
+                    kept++;
+                }
+
+                ta.RemoveRange(kept, ta.Count - kept); tb.RemoveRange(kept, tb.Count - kept); tc.RemoveRange(kept, tc.Count - kept);
+                ua.RemoveRange(kept, ua.Count - kept); ub.RemoveRange(kept, ub.Count - kept); uc.RemoveRange(kept, uc.Count - kept);
             }
 
             ObjModel model = new ObjModel();
@@ -145,7 +199,7 @@ namespace SP2TextureMod
         // everything else (comments, vn, o, g, usemtl...) is skipped. Polygons are fanned into triangles.
         private static void Parse(byte[] d, List<Vector3> positions, List<Vector2> uvs,
             List<Vector3> ta, List<Vector3> tb, List<Vector3> tc, List<Vector2> ua, List<Vector2> ub, List<Vector2> uc,
-            bool flipX, ref int badLines, ref int cornersWithoutUv)
+            List<bool> complete, bool flipX, ref int badLines, ref int cornersWithoutUv)
         {
             int n = d.Length;
             int pos = 0;
@@ -249,9 +303,140 @@ namespace SP2TextureMod
 
                         AddTriangle(ta, tb, tc, ua, ub, uc,
                             positions[vi[0]], positions[vi[i]], positions[vi[i + 1]], uva, uvb, uvc, flipX);
+                        complete.Add(ti[0] >= 0 && ti[i] >= 0 && ti[i + 1] >= 0);
                     }
                 }
             }
+        }
+
+        // The first reader (a string per line, float.TryParse), kept as a cross-check: it is used when the fast one finds
+        // that many faces have no texture coordinates, to tell a file without them from a mistake of the fast reader.
+        private static void ParseSlow(string path, List<Vector3> positions, List<Vector2> uvs,
+            List<Vector3> ta, List<Vector3> tb, List<Vector3> tc, List<Vector2> ua, List<Vector2> ub, List<Vector2> uc,
+            List<bool> complete, bool flipX, ref int badLines, ref int cornersWithoutUv)
+        {
+            foreach (string line in File.ReadLines(path))
+            {
+                if (line.Length < 3)
+                {
+                    continue;
+                }
+
+                char c0 = line[0];
+                char c1 = line[1];
+                if (c0 == 'v' && c1 == ' ')
+                {
+                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+                    float x, y, z;
+                    if (p.Length >= 4 && TryFloat(p[1], out x) && TryFloat(p[2], out y) && TryFloat(p[3], out z))
+                    {
+                        positions.Add(new Vector3(x, y, z));
+                    }
+                    else
+                    {
+                        badLines++;
+                    }
+                }
+                else if (c0 == 'v' && c1 == 't' && line[2] == ' ')
+                {
+                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+                    float u, v;
+                    if (p.Length >= 3 && TryFloat(p[1], out u) && TryFloat(p[2], out v))
+                    {
+                        uvs.Add(new Vector2(u, v));
+                    }
+                    else
+                    {
+                        badLines++;
+                    }
+                }
+                else if (c0 == 'f' && c1 == ' ')
+                {
+                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
+                    int count = p.Length - 1;
+                    if (count < 3)
+                    {
+                        badLines++;
+                        continue;
+                    }
+
+                    int[] vi = new int[count];
+                    int[] ti = new int[count];
+                    bool ok = true;
+                    for (int i = 0; i < count; i++)
+                    {
+                        if (!ParseCorner(p[i + 1], positions.Count, uvs.Count, out vi[i], out ti[i]))
+                        {
+                            ok = false;
+                            break;
+                        }
+                    }
+
+                    if (!ok)
+                    {
+                        badLines++;
+                        continue;
+                    }
+
+                    for (int i = 1; i < count - 1; i++)
+                    {
+                        Vector2 uva = ti[0] >= 0 ? uvs[ti[0]] : Vector2.zero;
+                        Vector2 uvb = ti[i] >= 0 ? uvs[ti[i]] : Vector2.zero;
+                        Vector2 uvc = ti[i + 1] >= 0 ? uvs[ti[i + 1]] : Vector2.zero;
+                        if (ti[0] < 0) cornersWithoutUv++;
+                        if (ti[i] < 0) cornersWithoutUv++;
+                        if (ti[i + 1] < 0) cornersWithoutUv++;
+
+                        AddTriangle(ta, tb, tc, ua, ub, uc,
+                            positions[vi[0]], positions[vi[i]], positions[vi[i + 1]], uva, uvb, uvc, flipX);
+                        complete.Add(ti[0] >= 0 && ti[i] >= 0 && ti[i + 1] >= 0);
+                    }
+                }
+            }
+        }
+
+        private static bool TryFloat(string text, out float value)
+        {
+            return float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        }
+
+        // A face corner is "v", "v/vt", "v//vn" or "v/vt/vn"; indexes are 1-based, negative ones count from the end.
+        private static bool ParseCorner(string token, int vertexCount, int uvCount, out int vertexIndex, out int uvIndex)
+        {
+            vertexIndex = -1;
+            uvIndex = -1;
+
+            int slash = token.IndexOf('/');
+            string vertexText = slash < 0 ? token : token.Substring(0, slash);
+
+            int v;
+            if (!int.TryParse(vertexText, NumberStyles.Integer, CultureInfo.InvariantCulture, out v))
+            {
+                return false;
+            }
+
+            vertexIndex = v > 0 ? v - 1 : vertexCount + v;
+            if (vertexIndex < 0 || vertexIndex >= vertexCount)
+            {
+                return false;
+            }
+
+            if (slash >= 0)
+            {
+                int slash2 = token.IndexOf('/', slash + 1);
+                string uvText = slash2 < 0 ? token.Substring(slash + 1) : token.Substring(slash + 1, slash2 - slash - 1);
+                int t;
+                if (uvText.Length > 0 && int.TryParse(uvText, NumberStyles.Integer, CultureInfo.InvariantCulture, out t))
+                {
+                    int index = t > 0 ? t - 1 : uvCount + t;
+                    if (index >= 0 && index < uvCount)
+                    {
+                        uvIndex = index;
+                    }
+                }
+            }
+
+            return true;
         }
 
         private static readonly double[] Powers = BuildPowers();

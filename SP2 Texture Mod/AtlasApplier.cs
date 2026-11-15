@@ -62,6 +62,8 @@ namespace SP2TextureMod
         private static Texture2D _heightMap;
         private static bool _specularLoaded;
         private static float _specularAverage;
+        private static AtlasMaterial.SpecularKind _specularKind;
+        private static string _modelProblem = "";
         private static AtlasLook _look = new AtlasLook();
         private static AircraftScript _activeAircraft;
         private static ObjModel _model;
@@ -381,6 +383,7 @@ namespace SP2TextureMod
             a.Smoothness = Plugin.Smoothness.Value;
             a.SpecularAverage = _specularLoaded ? _specularAverage : 0f;
             a.SpecularGain = Plugin.SpecularGain.Value;
+            a.SpecularKind = (int)_specularKind;
 
             if (_hasFitBounds)
             {
@@ -605,6 +608,7 @@ namespace SP2TextureMod
             System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
             _hasFitBounds = false;
             _alignmentFromSaved = false;
+            _modelProblem = "";
 
             ThemeScript theme = aircraft.Theme;
             if (theme == null || theme.Theme == null || theme.Material == null)
@@ -706,6 +710,7 @@ namespace SP2TextureMod
                 transfer = FitModel(aircraft, candidates, out fit);
                 if (!transfer)
                 {
+                    _modelProblem = "the model could not be aligned to the craft";
                     _modelPath = null;
                     _uvCache = null;
                 }
@@ -794,9 +799,16 @@ namespace SP2TextureMod
                 }
             }
 
-            StatusText = "Applied to " + renderers + " renderers in " + watch.ElapsedMilliseconds + " ms";
+            bool modelFailed = !transfer && TextureLibrary.CurrentModelPath != null;
+            StatusText = "Applied to " + renderers + " renderers in " + watch.ElapsedMilliseconds + " ms"
+                + (modelFailed ? ". THE MODEL WAS NOT USED, the image is only tiled." : "");
             StatusRows.Clear();
             StatusAdd("Mode", transfer ? "model UV transfer" : "tiled, " + F(Plugin.TilesPerMeter.Value) + " per meter");
+            if (modelFailed)
+            {
+                StatusAdd("Model", "NOT USED: " + (_modelProblem.Length > 0 ? _modelProblem : "see the log"));
+            }
+
             StatusAdd("Maps", MapsSummary());
             if (transfer)
             {
@@ -936,6 +948,7 @@ namespace SP2TextureMod
             string error;
             if (!ModelCache.Get(path, Plugin.FlipModelX.Value, out model, out bvh, out error))
             {
+                _modelProblem = error;
                 SetStatus("Model not used: " + error);
                 _model = null;
                 _bvh = null;
@@ -1407,10 +1420,13 @@ namespace SP2TextureMod
                     {
                         _specularLoaded = true;
                         _specularAverage = average;
-                        Plugin.Log.LogInfo(Tag + "specular map '" + specular.FileName + "': " + note
-                            + ". The part shader has no specular map: the average adds "
-                            + F(AtlasMaterial.EffectiveSmoothness(0f, average, Plugin.SpecularGain.Value)) + " to the smoothness (gain "
-                            + F(Plugin.SpecularGain.Value) + ").");
+                        _specularKind = AtlasMaterial.KindOf(specular.FileName);
+                        float addMetallic = 0f;
+                        float addSmoothness = 0f;
+                        AtlasMaterial.FromSpecularMap(_specularKind, average, Plugin.SpecularGain.Value, true, ref addMetallic, ref addSmoothness);
+                        Plugin.Log.LogInfo(Tag + "specular map '" + specular.FileName + "': " + note + ". Taken as a " + _specularKind.ToString().ToLowerInvariant()
+                            + " map; the part shader has no such map, so its average adds " + F(addMetallic) + " to the metallic and "
+                            + F(addSmoothness) + " to the smoothness (whole craft).");
                     }
                     else
                     {
@@ -1465,7 +1481,7 @@ namespace SP2TextureMod
             string text = "";
             if (_normalMap != null) text += "normal";
             if (_occlusionMap != null) text += (text.Length > 0 ? ", " : "") + "occlusion";
-            if (_specularLoaded) text += (text.Length > 0 ? ", " : "") + "specular (average only)";
+            if (_specularLoaded) text += (text.Length > 0 ? ", " : "") + _specularKind.ToString().ToLowerInvariant() + " (average only)";
             if (_heightMap != null) text += (text.Length > 0 ? ", " : "") + "height";
             return text.Length > 0 ? text : "none";
         }
@@ -1486,9 +1502,11 @@ namespace SP2TextureMod
             _look.NormalStrength = Plugin.NormalStrength.Value;
             _look.OcclusionStrength = Plugin.OcclusionStrength.Value;
             _look.ParallaxHeight = Plugin.ParallaxHeight.Value;
-            _look.Metallic = Plugin.Metallic.Value;
-            _look.Smoothness = AtlasMaterial.EffectiveSmoothness(Plugin.Smoothness.Value,
-                _specularLoaded ? _specularAverage : 0f, Plugin.SpecularGain.Value);
+            float metallic = Plugin.Metallic.Value;
+            float smoothness = Plugin.Smoothness.Value;
+            AtlasMaterial.FromSpecularMap(_specularKind, _specularAverage, Plugin.SpecularGain.Value, _specularLoaded, ref metallic, ref smoothness);
+            _look.Metallic = metallic;
+            _look.Smoothness = smoothness;
         }
 
         /// <summary>Applies the strength, metallic and smoothness settings to the material that is already in use.</summary>
