@@ -297,6 +297,7 @@ namespace SP2TextureMod.UI
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Write diagnostic to log", DiagnosticDump.Dump),
+                new KeyValuePair<string, Action>("Check shaders", ShaderProbe.Run),
             });
         }
 
