@@ -1008,6 +1008,8 @@ namespace SP2TextureMod
                 int stride = Mathf.Max(1, total / 400);
                 List<Vector3> samples = new List<Vector3>(800);
                 List<Vector3> sampleNormals = new List<Vector3>(800);
+                List<Vector3> gridPoints = new List<Vector3>(3200);
+                int gridStride = Mathf.Max(1, total / 3000);
                 List<Vector3> vertices = new List<Vector3>();
                 List<Vector3> normals = new List<Vector3>();
                 Vector3 min = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
@@ -1026,6 +1028,11 @@ namespace SP2TextureMod
                         Vector3 p = toCraft.MultiplyPoint3x4(vertices[i]);
                         min = Vector3.Min(min, p);
                         max = Vector3.Max(max, p);
+                        if (counter % gridStride == 0)
+                        {
+                            gridPoints.Add(p);
+                        }
+
                         if (counter++ % stride == 0)
                         {
                             samples.Add(p);
@@ -1052,7 +1059,7 @@ namespace SP2TextureMod
                     && _fitModelPath == ModelCache.LoadedPath && _fitFlip == ModelCache.LoadedFlip;
                 if (!reused)
                 {
-                    _fitCandidates = ModelAlignment.FitCandidates(_model, _bvh, samples, bounds);
+                    _fitCandidates = ModelAlignment.FitCandidates(_model, _bvh, samples, bounds, gridPoints);
                     _fitChoice = Mathf.Clamp(_pendingOrientation, 0, _fitCandidates.Count - 1);
                     _pendingOrientation = 0;
                     _fitAircraft = aircraft;

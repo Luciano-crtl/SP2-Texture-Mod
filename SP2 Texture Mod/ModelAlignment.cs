@@ -38,14 +38,156 @@ namespace SP2TextureMod
 
         private static readonly Matrix4x4[] Orientations = BuildOrientations();
 
-        public static List<ModelAlignment> FitCandidates(ObjModel model, TriangleBvh bvh, List<Vector3> samples, Bounds craftBounds)
+        // What a evaluation needs: the model's index, the craft's samples, and (for the two-sided measure) a grid of many craft
+        // points and a sample of the model's surface.
+        private sealed class Context
+        {
+            public TriangleBvh Bvh;
+            public List<Vector3> Samples;
+            public PointGrid Grid;       // null = one-sided measure only
+            public Vector3[] ModelPoints;
+            public float[] Scratch;
+            public float[] ScratchB;
+            public float LastA; // the one-sided part of the last evaluation
+        }
+
+        // Craft points kept in a uniform grid, to find the nearest one quickly.
+        private sealed class PointGrid
+        {
+            private readonly Vector3[] _points;
+            private readonly int[] _start;
+            private readonly Vector3 _min;
+            private readonly float _cell;
+            private readonly int _nx, _ny, _nz;
+            private readonly Vector3 _max;
+
+            public PointGrid(List<Vector3> points, Bounds bounds)
+            {
+                _min = bounds.min;
+                _max = bounds.max;
+                Vector3 size = bounds.size;
+                _cell = Math.Max(1e-3f, Math.Max(size.x, Math.Max(size.y, size.z)) / 32f);
+                _nx = Math.Max(1, (int)(size.x / _cell) + 1);
+                _ny = Math.Max(1, (int)(size.y / _cell) + 1);
+                _nz = Math.Max(1, (int)(size.z / _cell) + 1);
+                int cells = _nx * _ny * _nz;
+                int[] counts = new int[cells + 1];
+                int[] cellOf = new int[points.Count];
+                for (int i = 0; i < points.Count; i++)
+                {
+                    cellOf[i] = CellIndex(points[i]);
+                    counts[cellOf[i] + 1]++;
+                }
+
+                for (int c = 0; c < cells; c++)
+                {
+                    counts[c + 1] += counts[c];
+                }
+
+                _start = counts;
+                _points = new Vector3[points.Count];
+                int[] fill = new int[cells];
+                for (int i = 0; i < points.Count; i++)
+                {
+                    _points[_start[cellOf[i]] + fill[cellOf[i]]++] = points[i];
+                }
+            }
+
+            private int Clamp(int v, int n)
+            {
+                return v < 0 ? 0 : (v >= n ? n - 1 : v);
+            }
+
+            private int CellIndex(Vector3 p)
+            {
+                int x = Clamp((int)((p.x - _min.x) / _cell), _nx);
+                int y = Clamp((int)((p.y - _min.y) / _cell), _ny);
+                int z = Clamp((int)((p.z - _min.z) / _cell), _nz);
+                return (z * _ny + y) * _nx + x;
+            }
+
+            /// <summary>Distance to the nearest point (at most a few cells away is searched; farther counts as that).</summary>
+            public float Nearest(Vector3 p)
+            {
+                // A point outside the grid is at least as far as the box.
+                float ox = Math.Max(Math.Max(_min.x - p.x, p.x - _max.x), 0f);
+                float oy = Math.Max(Math.Max(_min.y - p.y, p.y - _max.y), 0f);
+                float oz = Math.Max(Math.Max(_min.z - p.z, p.z - _max.z), 0f);
+                float outside = Mathf.Sqrt(ox * ox + oy * oy + oz * oz);
+
+                int cx = Clamp((int)((p.x - _min.x) / _cell), _nx);
+                int cy = Clamp((int)((p.y - _min.y) / _cell), _ny);
+                int cz = Clamp((int)((p.z - _min.z) / _cell), _nz);
+                float best = float.MaxValue;
+                const int MaxRing = 5;
+                for (int r = 0; r <= MaxRing; r++)
+                {
+                    for (int z = cz - r; z <= cz + r; z++)
+                    {
+                        if (z < 0 || z >= _nz) continue;
+                        for (int y = cy - r; y <= cy + r; y++)
+                        {
+                            if (y < 0 || y >= _ny) continue;
+                            bool edgeYZ = z == cz - r || z == cz + r || y == cy - r || y == cy + r;
+                            for (int x = cx - r; x <= cx + r; x += (edgeYZ || r == 0) ? 1 : 2 * r)
+                            {
+                                if (x < 0 || x >= _nx) continue;
+                                int cell = (z * _ny + y) * _nx + x;
+                                for (int i = _start[cell]; i < _start[cell + 1]; i++)
+                                {
+                                    float dx = _points[i].x - p.x, dy = _points[i].y - p.y, dz = _points[i].z - p.z;
+                                    float d = dx * dx + dy * dy + dz * dz;
+                                    if (d < best) best = d;
+                                }
+                            }
+                        }
+                    }
+
+                    if (best < float.MaxValue && Mathf.Sqrt(best) <= r * _cell)
+                    {
+                        break;
+                    }
+                }
+
+                float result = best < float.MaxValue ? Mathf.Sqrt(best) : (MaxRing + 1) * _cell;
+                return Math.Max(result, outside);
+            }
+        }
+
+        /// <summary>
+        /// gridPoints: many points of the craft's surface (in craft space). With them the fit also measures how far the model's
+        /// surface is from the craft (the worst 30% ignored: parts the craft does not have), so a model that is a little too big
+        /// no longer fits as well as the right size (the one-sided measure alone rewards a large model, which has surface
+        /// near every point of the craft, inside the craft too).
+        /// </summary>
+        public static List<ModelAlignment> FitCandidates(ObjModel model, TriangleBvh bvh, List<Vector3> samples, Bounds craftBounds,
+            List<Vector3> gridPoints = null)
         {
             Vector3 objCenter = model.Bounds.center;
             Vector3 objSize = model.Bounds.size;
             Vector3 craftCenter = craftBounds.center;
             Vector3 craftSize = craftBounds.size;
             float craftMax = Math.Max(craftSize.x, Math.Max(craftSize.y, craftSize.z));
-            float[] scratch = new float[samples.Count];
+            Context context = new Context();
+            context.Bvh = bvh;
+            context.Samples = samples;
+            context.Scratch = new float[samples.Count];
+            if (gridPoints != null && gridPoints.Count > 50)
+            {
+                Bounds grown = craftBounds;
+                grown.Expand(0.01f);
+                context.Grid = new PointGrid(gridPoints, grown);
+                int wanted = Math.Min(600, model.TriangleCount);
+                int step = Math.Max(1, model.TriangleCount / wanted);
+                List<Vector3> picked = new List<Vector3>(wanted);
+                for (int t = 0; t < model.TriangleCount && picked.Count < wanted; t += step)
+                {
+                    picked.Add((model.A[t] + model.B[t] + model.C[t]) * (1f / 3f));
+                }
+
+                context.ModelPoints = picked.ToArray();
+                context.ScratchB = new float[picked.Count];
+            }
 
             // 1. First guess of every orientation: bounding boxes of similar size, centered on each other.
             int count = Orientations.Length;
@@ -63,7 +205,7 @@ namespace SP2TextureMod
 
                 float[] x = { craftCenter.x, craftCenter.y, craftCenter.z, Mathf.Log(s0), 0f, 0f, 0f };
                 starts[k] = x;
-                firstMean[k] = Evaluate(bvh, samples, Build(Orientations[k], objCenter, x), Mathf.Exp(x[3]), scratch);
+                firstMean[k] = Evaluate(context, Build(Orientations[k], objCenter, x), Mathf.Exp(x[3]));
                 firstScore[k] = firstMean[k] * Bonus(k);
                 order[k] = k;
             }
@@ -78,7 +220,9 @@ namespace SP2TextureMod
             {
                 int k = order[r];
                 float[] p = (float[])starts[k].Clone();
-                float mean = Refine(bvh, samples, Orientations[k], objCenter, p, craftMax, scratch);
+                Refine(context, Orientations[k], objCenter, p, craftMax);
+                Evaluate(context, Build(Orientations[k], objCenter, p), Mathf.Exp(p[3]));
+                float mean = context.LastA; // reported (and used for the "poor fit" warning) as the distance from the craft to the model
 
                 ModelAlignment candidate = new ModelAlignment();
                 candidate.ObjToCraft = Build(Orientations[k], objCenter, p);
@@ -131,10 +275,9 @@ namespace SP2TextureMod
         }
 
         // Coordinate descent on position (3), log scale (1) and small rotations (3). Returns the mean distance.
-        private static float Refine(TriangleBvh bvh, List<Vector3> samples, Matrix4x4 orientation, Vector3 objCenter,
-            float[] p, float craftMax, float[] scratch)
+        private static float Refine(Context context, Matrix4x4 orientation, Vector3 objCenter, float[] p, float craftMax)
         {
-            float cur = Evaluate(bvh, samples, Build(orientation, objCenter, p), Mathf.Exp(p[3]), scratch);
+            float cur = Evaluate(context, Build(orientation, objCenter, p), Mathf.Exp(p[3]));
             float[] step = { 0.05f * craftMax, 0.05f * craftMax, 0.05f * craftMax, 0.04f, 3f, 3f, 3f };
             for (int round = 0; round < 8; round++)
             {
@@ -144,7 +287,7 @@ namespace SP2TextureMod
                     {
                         float old = p[i];
                         p[i] = old + dir * step[i];
-                        float c = Evaluate(bvh, samples, Build(orientation, objCenter, p), Mathf.Exp(p[3]), scratch);
+                        float c = Evaluate(context, Build(orientation, objCenter, p), Mathf.Exp(p[3]));
                         if (c < cur)
                         {
                             cur = c;
@@ -164,14 +307,18 @@ namespace SP2TextureMod
             return cur;
         }
 
-        private static float Evaluate(TriangleBvh bvh, List<Vector3> samples, Matrix4x4 objToCraft, float scale, float[] scratch)
+        // The cost of an alignment: the mean distance from the craft's samples to the model (the worst 2% left out) plus, when
+        // there is a grid, the mean distance from the model's surface sample to the craft (the worst 30% left out).
+        private static float Evaluate(Context c, Matrix4x4 objToCraft, float scale)
         {
             Matrix4x4 inverse = objToCraft.inverse;
+            List<Vector3> samples = c.Samples;
             int n = samples.Count;
+            float[] scratch = c.Scratch;
             for (int i = 0; i < n; i++)
             {
                 Vector3 q = inverse.MultiplyPoint3x4(samples[i]);
-                scratch[i] = Mathf.Sqrt(bvh.NearestDistanceSquared(q)) * scale;
+                scratch[i] = Mathf.Sqrt(c.Bvh.NearestDistanceSquared(q)) * scale;
             }
 
             Array.Sort(scratch, 0, n);
@@ -182,7 +329,27 @@ namespace SP2TextureMod
                 sum += scratch[i];
             }
 
-            return sum / keep;
+            c.LastA = sum / keep;
+            if (c.Grid == null)
+            {
+                return c.LastA;
+            }
+
+            int m = c.ModelPoints.Length;
+            for (int i = 0; i < m; i++)
+            {
+                c.ScratchB[i] = c.Grid.Nearest(objToCraft.MultiplyPoint3x4(c.ModelPoints[i]));
+            }
+
+            Array.Sort(c.ScratchB, 0, m);
+            int keepB = Math.Max(1, (int)(m * 0.7f));
+            float sumB = 0f;
+            for (int i = 0; i < keepB; i++)
+            {
+                sumB += c.ScratchB[i];
+            }
+
+            return c.LastA + sumB / keepB;
         }
 
         // craft = translate(t) * smallRotation * orientation * scale(s) * translate(-objCenter)
