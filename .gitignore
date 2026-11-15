@@ -361,3 +361,18 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# --- SP2 Texture Mod ---
+# Per-machine game path (copy GameDir.props.example to GameDir.props)
+GameDir.props
+# Decompiled game code is study material only and never goes into the repository
+_decompiled/
+decompiled/
+# Python virtualenv used by tools/check_syntax.py
+.venv/
+
+# Compile check: generated stand-in and build output
+tools/compile-check/Stubs/DiagnosticDumpStub.cs
+tools/compile-check/bin/
+tools/compile-check/obj/
+tools/logic-tests/bin/
+tools/logic-tests/obj/

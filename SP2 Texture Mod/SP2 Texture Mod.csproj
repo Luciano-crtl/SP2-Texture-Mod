@@ -2,8 +2,74 @@
 
   <PropertyGroup>
     <TargetFramework>netstandard2.1</TargetFramework>
-    <RootNamespace>SP2_Texture_Mod</RootNamespace>
-    <Nullable>enable</Nullable>
+    <AssemblyName>SP2TextureMod</AssemblyName>
+    <RootNamespace>SP2TextureMod</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!--
+    Game folder. Copy "GameDir.props.example" to "GameDir.props" (same folder as this file)
+    and edit the path. GameDir.props is ignored by git, so each machine keeps its own path.
+  -->
+  <Import Project="GameDir.props" Condition="Exists('GameDir.props')" />
+
+  <PropertyGroup>
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\SimplePlanes 2</GameDir>
+    <GameDataDir Condition="'$(GameDataDir)' == '' And Exists('$(GameDir)\SimplePlanes 2_Data\Managed')">$(GameDir)\SimplePlanes 2_Data</GameDataDir>
+    <GameDataDir Condition="'$(GameDataDir)' == '' And Exists('$(GameDir)\SimplePlanes 2 (1.1)_Data\Managed')">$(GameDir)\SimplePlanes 2 (1.1)_Data</GameDataDir>
+    <ManagedDir>$(GameDataDir)\Managed</ManagedDir>
+    <BepInExCoreDir>$(GameDir)\BepInEx\core</BepInExCoreDir>
+    <PluginsDir>$(GameDir)\BepInEx\plugins</PluginsDir>
+  </PropertyGroup>
+
+  <Target Name="CheckGameDir" BeforeTargets="ResolveAssemblyReferences;CoreCompile">
+    <Error Condition="!Exists('$(ManagedDir)\Game.dll')"
+           Text="Game.dll not found in '$(ManagedDir)'. Copy GameDir.props.example to GameDir.props and set GameDir (and GameDataDir if the *_Data folder has another name)." />
+    <Error Condition="!Exists('$(BepInExCoreDir)\BepInEx.dll')"
+           Text="BepInEx.dll not found in '$(BepInExCoreDir)'. Install BepInEx 5 (x64, Mono) in the game folder and run the game once." />
+  </Target>
+
+  <!-- Everything below is only referenced, never copied to the output (Private=False). -->
+  <ItemGroup>
+    <!-- Required -->
+    <Reference Include="BepInEx"><HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCoreDir)\0Harmony.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Game"><HintPath>$(ManagedDir)\Game.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Jundroo.Common"><HintPath>$(ManagedDir)\Jundroo.Common.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Jundroo.Packages"><HintPath>$(ManagedDir)\Jundroo.Packages.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine"><HintPath>$(ManagedDir)\UnityEngine.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.InputSystem"><HintPath>$(ManagedDir)\Unity.InputSystem.dll</HintPath><Private>False</Private></Reference>
+  </ItemGroup>
+
+  <!-- Optional: referenced only if the file exists, so a missing one never breaks the build.
+       The game's own signatures mention some of these types (UniTask, FishNet, Unity.Collections...);
+       the compiler needs them whenever such a member is bound. -->
+  <ItemGroup>
+    <Reference Include="UnityEngine.PhysicsModule" Condition="Exists('$(ManagedDir)\UnityEngine.PhysicsModule.dll')"><HintPath>$(ManagedDir)\UnityEngine.PhysicsModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.ImageConversionModule" Condition="Exists('$(ManagedDir)\UnityEngine.ImageConversionModule.dll')"><HintPath>$(ManagedDir)\UnityEngine.ImageConversionModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.IMGUIModule" Condition="Exists('$(ManagedDir)\UnityEngine.IMGUIModule.dll')"><HintPath>$(ManagedDir)\UnityEngine.IMGUIModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.AssetBundleModule" Condition="Exists('$(ManagedDir)\UnityEngine.AssetBundleModule.dll')"><HintPath>$(ManagedDir)\UnityEngine.AssetBundleModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.UI" Condition="Exists('$(ManagedDir)\UnityEngine.UI.dll')"><HintPath>$(ManagedDir)\UnityEngine.UI.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UnityEngine.UIModule" Condition="Exists('$(ManagedDir)\UnityEngine.UIModule.dll')"><HintPath>$(ManagedDir)\UnityEngine.UIModule.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.TextMeshPro" Condition="Exists('$(ManagedDir)\Unity.TextMeshPro.dll')"><HintPath>$(ManagedDir)\Unity.TextMeshPro.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.Mathematics" Condition="Exists('$(ManagedDir)\Unity.Mathematics.dll')"><HintPath>$(ManagedDir)\Unity.Mathematics.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.Collections" Condition="Exists('$(ManagedDir)\Unity.Collections.dll')"><HintPath>$(ManagedDir)\Unity.Collections.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.Burst" Condition="Exists('$(ManagedDir)\Unity.Burst.dll')"><HintPath>$(ManagedDir)\Unity.Burst.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Core.Runtime" Condition="Exists('$(ManagedDir)\Unity.RenderPipelines.Core.Runtime.dll')"><HintPath>$(ManagedDir)\Unity.RenderPipelines.Core.Runtime.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="Unity.RenderPipelines.Universal.Runtime" Condition="Exists('$(ManagedDir)\Unity.RenderPipelines.Universal.Runtime.dll')"><HintPath>$(ManagedDir)\Unity.RenderPipelines.Universal.Runtime.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="UniTask" Condition="Exists('$(ManagedDir)\UniTask.dll')"><HintPath>$(ManagedDir)\UniTask.dll</HintPath><Private>False</Private></Reference>
+    <Reference Include="FishNet.Runtime" Condition="Exists('$(ManagedDir)\FishNet.Runtime.dll')"><HintPath>$(ManagedDir)\FishNet.Runtime.dll</HintPath><Private>False</Private></Reference>
+  </ItemGroup>
+
+  <!-- After a successful build, copy the plugin into BepInEx\plugins (skipped if the folder does not exist
+       or the game is running and the file is locked). -->
+  <Target Name="CopyToPlugins" AfterTargets="Build" Condition="Exists('$(PluginsDir)')">
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(PluginsDir)" ContinueOnError="true" />
+    <Message Importance="high" Text="SP2TextureMod.dll copied to $(PluginsDir)" />
+  </Target>
 
 </Project>

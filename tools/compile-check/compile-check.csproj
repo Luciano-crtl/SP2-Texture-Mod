@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    Compiles the mod's C# sources against small stand-ins for the game's types (Stubs/), so that type errors,
+    misspelled names and scope mistakes are found without the game's DLLs. It cannot know whether a stand-in matches
+    the real game: the stand-ins were copied from the decompiled game code, so keep them in step with it.
+    See README.md in this folder.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>SP2TextureModCheck</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0649;CS0169;CS0414;CS8019;CS0219;CS0067</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- DiagnosticDump.cs touches dozens of game members: it is replaced by Stubs/DiagnosticDumpStub.cs, which
+         gen_diag_stub.py builds from the real text of the helpers that other files use. -->
+    <Compile Include="../../SP2 Texture Mod/*.cs" Exclude="../../SP2 Texture Mod/DiagnosticDump.cs" />
+    <Compile Include="../../SP2 Texture Mod/UI/TexturePanelScript.cs" />
+    <Compile Include="Stubs/*.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" />
+    <PackageReference Include="HarmonyX" Version="2.16.1" />
+  </ItemGroup>
+</Project>

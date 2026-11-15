@@ -1,0 +1,13 @@
+<Project>
+  <!--
+    Copy this file to "GameDir.props" (same folder) and edit the path below.
+    "GameDir.props" is ignored by git: every machine keeps its own copy.
+  -->
+  <PropertyGroup>
+    <!-- Folder that contains the game .exe and the BepInEx folder -->
+    <GameDir>C:\Program Files (x86)\Steam\steamapps\common\SimplePlanes 2</GameDir>
+
+    <!-- Optional. Only needed if the data folder is not "SimplePlanes 2_Data" or "SimplePlanes 2 (1.1)_Data" -->
+    <!-- <GameDataDir>$(GameDir)\SimplePlanes 2_Data</GameDataDir> -->
+  </PropertyGroup>
+</Project>

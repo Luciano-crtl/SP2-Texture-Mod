@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Runs the mod's pure logic (map names, saved craft file) outside the game. See README.md. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CS0649;CS0169;CS0414;CS8019;CS0219</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../SP2 Texture Mod/TextureLibrary.cs" />
+    <Compile Include="../../SP2 Texture Mod/CraftAssignment.cs" />
+    <Compile Include="../../SP2 Texture Mod/ObjModel.cs" />
+    <Compile Include="../../SP2 Texture Mod/Json.cs" />
+    <Compile Include="../../SP2 Texture Mod/GltfDocument.cs" />
+    <Compile Include="../../SP2 Texture Mod/UvCache.cs" />
+    <Compile Include="Stubs.cs" />
+    <Compile Include="Tests.cs" />
+  </ItemGroup>
+</Project>
