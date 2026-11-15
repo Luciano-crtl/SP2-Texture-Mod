@@ -161,6 +161,168 @@ namespace SP2TextureMod
             return true;
         }
 
+        public enum Channel
+        {
+            Auto = 0,
+            R = 1,
+            G = 2,
+            B = 3,
+            A = 4
+        }
+
+        /// <summary>
+        /// Which channel of an image a metallic or roughness map lives in. The name decides: "...@channels=B.png" (what a
+        /// converter writes when it splits a glTF metallic-roughness image) means that channel; a single file that holds
+        /// both ("B2Metallic-B2Roughness.png") has metallic in blue and roughness in green; anything else is read as a
+        /// plain gray map.
+        /// </summary>
+        public static Channel ChannelFor(string fileName, bool forMetal)
+        {
+            string name = (fileName ?? "").ToLowerInvariant();
+            int tag = name.IndexOf("channels=", StringComparison.Ordinal);
+            if (tag >= 0 && tag + 9 < name.Length)
+            {
+                switch (name[tag + 9])
+                {
+                    case 'r': return Channel.R;
+                    case 'g': return Channel.G;
+                    case 'b': return Channel.B;
+                    case 'a': return Channel.A;
+                }
+            }
+
+            if (name.Contains("metal") && name.Contains("rough"))
+            {
+                return forMetal ? Channel.B : Channel.G;
+            }
+
+            return Channel.Auto;
+        }
+
+        /// <summary>
+        /// One channel of an image as bytes (one per pixel, rows bottom to top). If the channel the name asks for is empty
+        /// while another one holds data (a converter that wrote the value into a different channel), the fullest one is used.
+        /// </summary>
+        public static byte[] ReadChannel(string path, Channel channel, out int width, out int height, out string note)
+        {
+            Color32[] pixels = ReadPixels(path, out width, out height);
+            if (pixels == null)
+            {
+                note = "could not read the image";
+                return null;
+            }
+
+            int step = Math.Max(1, pixels.Length / 20000) | 1;
+            long[] sum = new long[4];
+            int[] max = new int[4];
+            int samples = 0;
+            for (int i = 0; i < pixels.Length; i += step)
+            {
+                Color32 c = pixels[i];
+                sum[0] += c.r; sum[1] += c.g; sum[2] += c.b; sum[3] += c.a;
+                if (c.r > max[0]) max[0] = c.r;
+                if (c.g > max[1]) max[1] = c.g;
+                if (c.b > max[2]) max[2] = c.b;
+                if (c.a > max[3]) max[3] = c.a;
+                samples++;
+            }
+
+            int chosen;
+            string why;
+            if (channel == Channel.Auto)
+            {
+                chosen = IsGrayscale(pixels) ? 1 : 0;
+                why = IsGrayscale(pixels) ? "gray image" : "not gray: red channel";
+            }
+            else
+            {
+                chosen = (int)channel - 1;
+                why = "channel " + channel + " as the name says";
+                if (max[chosen] <= 2)
+                {
+                    int best = 0;
+                    for (int k = 1; k < 3; k++)
+                    {
+                        if (sum[k] > sum[best]) best = k;
+                    }
+
+                    if (max[best] > 2)
+                    {
+                        chosen = best;
+                        why = "channel " + channel + " is empty, the fullest one (" + "RGB"[best] + ") is used";
+                    }
+                }
+            }
+
+            byte[] result = new byte[pixels.Length];
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                Color32 c = pixels[i];
+                result[i] = chosen == 0 ? c.r : (chosen == 1 ? c.g : (chosen == 2 ? c.b : c.a));
+            }
+
+            note = width + "x" + height + ", " + why + ", average " + (100f * sum[chosen] / Math.Max(1, samples) / 255f).ToString("0.#", CultureInfo.InvariantCulture) + "%";
+            return result;
+        }
+
+        public static float Average(byte[] values)
+        {
+            if (values == null || values.Length == 0)
+            {
+                return 0f;
+            }
+
+            int step = Math.Max(1, values.Length / 50000) | 1;
+            long sum = 0;
+            int count = 0;
+            for (int i = 0; i < values.Length; i += step)
+            {
+                sum += values[i];
+                count++;
+            }
+
+            return sum / (255f * count);
+        }
+
+        /// <summary>
+        /// The map the URP Lit shader reads: metallic in R, smoothness (1 - roughness) in A. A missing metallic or roughness
+        /// image is replaced by the constant. The two images may differ in size: the larger size is used.
+        /// </summary>
+        public static Texture2D PackMetalSmooth(byte[] metal, int metalW, int metalH, byte[] rough, int roughW, int roughH,
+            float constantMetallic, float constantSmoothness)
+        {
+            int width = Math.Max(metal != null ? metalW : 0, rough != null ? roughW : 0);
+            int height = Math.Max(metal != null ? metalH : 0, rough != null ? roughH : 0);
+            if (width <= 0 || height <= 0)
+            {
+                return null;
+            }
+
+            byte metalConstant = (byte)Mathf.Clamp(Mathf.RoundToInt(constantMetallic * 255f), 0, 255);
+            byte smoothConstant = (byte)Mathf.Clamp(Mathf.RoundToInt(constantSmoothness * 255f), 0, 255);
+            Color32[] result = new Color32[width * height];
+            for (int y = 0; y < height; y++)
+            {
+                int my = metal != null ? (int)((long)y * metalH / height) : 0;
+                int ry = rough != null ? (int)((long)y * roughH / height) : 0;
+                for (int x = 0; x < width; x++)
+                {
+                    byte m = metal != null ? metal[my * metalW + (int)((long)x * metalW / width)] : metalConstant;
+                    byte a = rough != null ? (byte)(255 - rough[ry * roughW + (int)((long)x * roughW / width)]) : smoothConstant;
+                    result[y * width + x] = new Color32(m, m, m, a);
+                }
+            }
+
+            Texture2D texture = new Texture2D(width, height, TextureFormat.RGBA32, true, true);
+            texture.name = "metal+smoothness";
+            texture.SetPixels32(result);
+            texture.wrapMode = TextureWrapMode.Repeat;
+            texture.filterMode = FilterMode.Trilinear;
+            texture.anisoLevel = 8;
+            texture.Apply(true, true);
+            return texture;
+        }
+
         // Decodes a PNG or JPG into raw pixels (through a throwaway texture).
         private static Color32[] ReadPixels(string path, out int width, out int height)
         {

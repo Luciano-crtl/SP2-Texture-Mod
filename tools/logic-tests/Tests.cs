@@ -66,6 +66,22 @@ internal static class Program
         Check(TextureLibrary.Normal.CurrentName == "ta152_n.png" && TextureLibrary.Occlusion.CurrentName == "ta152_ao.png"
             && TextureLibrary.Height.CurrentName == "ta152_h.png" && TextureLibrary.Specular.CurrentName == "ta152_spec.png", "usual endings found");
 
+        // The B-2 set: names without underscores and a glTF metallic-roughness image split by channel.
+        Fill("B2BaseColor.png", "B2Normal.png", "B2Metallic-B2Roughness@channels=B.png", "B2Metallic-B2Roughness@channels=G.png",
+            "internal_ground_ao_texture.jpeg", "B-2.obj");
+        Plugin.SelectedTexture.Value = "B2BaseColor.png";
+        TextureLibrary.Refresh();
+        Check(TextureLibrary.CurrentImage.FileName == "B2BaseColor.png" && TextureLibrary.ImageCount == 2,
+            "B-2: the albedo list holds BaseColor and the ground AO (got " + TextureLibrary.ImageCount + ")");
+        Check(TextureLibrary.Normal.CurrentName == "B2Normal.png", "B-2 normal = " + TextureLibrary.Normal.CurrentName);
+        Check(TextureLibrary.Metalness.CurrentName == "B2Metallic-B2Roughness@channels=B.png", "B-2 metalness = " + TextureLibrary.Metalness.CurrentName);
+        Check(TextureLibrary.Roughness.CurrentName == "B2Metallic-B2Roughness@channels=G.png", "B-2 roughness = " + TextureLibrary.Roughness.CurrentName);
+        Check(TextureLibrary.Occlusion.CurrentName == null, "B-2 occlusion: the ground AO of another object is not taken");
+
+        Fill("ta152_a.png", "ta152_n.png", "ta152_ao.png", "ta152_h.png", "ta152_spec.png", "ta152_a.obj", "sunset_s.png", "wood.png");
+        Plugin.SelectedTexture.Value = "ta152_a.png";
+        TextureLibrary.Refresh();
+
         // Selecting what a saved assignment names.
         CraftAssignment a = new CraftAssignment();
         a.Image = "wood.png"; a.Model = ""; a.Normal = "ta152_n.png"; a.Specular = "";

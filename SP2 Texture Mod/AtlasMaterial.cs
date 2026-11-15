@@ -21,6 +21,14 @@ namespace SP2TextureMod
         public float ParallaxHeight = 0.02f;
         public float Metallic;
         public float Smoothness;
+
+        /// <summary>
+        /// Only with the URP Lit shader: metallic in R and smoothness (1 - roughness) in A, per pixel. Null: the single values above.
+        /// </summary>
+        public Texture2D MetalSmooth;
+
+        /// <summary>Use the URP Lit shader instead of the part shader (per-pixel metallic and smoothness; the look can differ).</summary>
+        public bool UseLit;
     }
 
     /// <summary>
@@ -37,6 +45,7 @@ namespace SP2TextureMod
         {
             public ThemeScript Theme;
             public AtlasLook Look;
+            public bool IsLit;
         }
 
         private static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
@@ -48,6 +57,29 @@ namespace SP2TextureMod
         private static readonly int ParallaxMapId = Shader.PropertyToID("_ParallaxMap");
         private static readonly int ParallaxId = Shader.PropertyToID("_Parallax");
         private static readonly int MaterialDataId = Shader.PropertyToID("_MaterialData");
+        private static readonly int MetallicGlossMapId = Shader.PropertyToID("_MetallicGlossMap");
+        private static readonly int MetallicId = Shader.PropertyToID("_Metallic");
+        private static readonly int SmoothnessId = Shader.PropertyToID("_Smoothness");
+        private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+
+        private static Shader _lit;
+        private static bool _litSearched;
+
+        /// <summary>The URP Lit shader if the build has it (it does in game 0.1.100: see the shader probe), else null.</summary>
+        public static Shader LitShader
+        {
+            get
+            {
+                if (!_litSearched)
+                {
+                    _litSearched = true;
+                    _lit = Shader.Find("Universal Render Pipeline/Lit");
+                    Plugin.Log.LogInfo("[LIT] Shader.Find('Universal Render Pipeline/Lit') = " + (_lit != null ? "found, supported=" + _lit.isSupported : "NOT FOUND"));
+                }
+
+                return _lit != null && _lit.isSupported ? _lit : null;
+            }
+        }
 
         // Every material made here and the look it must keep (the theme rewrites _MaterialData now and then).
         private static readonly Dictionary<Material, Made> Materials = new Dictionary<Material, Made>();
@@ -55,6 +87,22 @@ namespace SP2TextureMod
         /// <summary>A new material with the look, or null if the theme cannot give an instance.</summary>
         public static Material Create(ThemeScript theme, AtlasLook look)
         {
+            if (look.UseLit)
+            {
+                Shader lit = LitShader;
+                if (lit != null)
+                {
+                    Material litMaterial = new Material(lit);
+                    litMaterial.name = "SP2TextureMod Atlas (Lit)";
+                    Materials[litMaterial] = new Made { Theme = theme, Look = look, IsLit = true };
+                    UpdateLit(litMaterial, look);
+                    return litMaterial;
+                }
+
+                Plugin.Log.LogWarning("[LIT] the URP Lit shader is not available: the part shader is used instead");
+                look.UseLit = false;
+            }
+
             Material material = theme.RequestDefaultPartMaterialInstance();
             if (material == null)
             {
@@ -71,6 +119,15 @@ namespace SP2TextureMod
         /// <summary>Puts the look (images, strengths, metallic, smoothness) on a material made here.</summary>
         public static void Update(Material material, ThemeScript theme, AtlasLook look)
         {
+            Made existing;
+            if (Materials.TryGetValue(material, out existing) && existing.IsLit)
+            {
+                UpdateLit(material, look);
+                existing.Theme = theme;
+                existing.Look = look;
+                return;
+            }
+
             material.SetTexture(BaseMapId, look.Albedo);
 
             SetMap(material, "_NORMALMAP", BumpMapId, look.Normal);
@@ -109,8 +166,14 @@ namespace SP2TextureMod
                 return;
             }
 
+            Made made;
+            bool lit = Materials.TryGetValue(material, out made) && made.IsLit;
             Materials.Remove(material);
-            if (theme != null)
+            if (lit || theme == null)
+            {
+                UnityEngine.Object.Destroy(material); // not one of the theme's own instances
+            }
+            else if (theme != null)
             {
                 theme.ReleaseDefaultPartMaterialInstance(material);
             }
@@ -132,7 +195,7 @@ namespace SP2TextureMod
             }
 
             Made made;
-            if (Materials.TryGetValue(material, out made))
+            if (Materials.TryGetValue(material, out made) && !made.IsLit)
             {
                 ApplyConstants(material, theme, made.Look);
             }
@@ -215,6 +278,43 @@ namespace SP2TextureMod
                 default:
                     smoothness = Mathf.Clamp01(smoothness + average * Mathf.Max(0f, gain));
                     break;
+            }
+        }
+
+        // The URP Lit shader: albedo, normal, occlusion, height, and metallic (R) with smoothness (A) per pixel.
+        private static void UpdateLit(Material material, AtlasLook look)
+        {
+            material.SetTexture(BaseMapId, look.Albedo);
+            material.SetColor(BaseColorId, Color.white);
+
+            SetMap(material, "_NORMALMAP", BumpMapId, look.Normal);
+            if (look.Normal != null)
+            {
+                material.SetFloat(BumpScaleId, look.NormalStrength);
+            }
+
+            SetMap(material, "_OCCLUSIONMAP", OcclusionMapId, look.Occlusion);
+            if (look.Occlusion != null)
+            {
+                material.SetFloat(OcclusionStrengthId, look.OcclusionStrength);
+            }
+
+            SetMap(material, "_PARALLAXMAP", ParallaxMapId, look.Height);
+            if (look.Height != null)
+            {
+                material.SetFloat(ParallaxId, look.ParallaxHeight);
+            }
+
+            if (look.MetalSmooth != null)
+            {
+                SetMap(material, "_METALLICSPECGLOSSMAP", MetallicGlossMapId, look.MetalSmooth);
+                material.SetFloat(SmoothnessId, 1f); // with a map this multiplies the smoothness in its alpha channel
+            }
+            else
+            {
+                SetMap(material, "_METALLICSPECGLOSSMAP", MetallicGlossMapId, null);
+                material.SetFloat(MetallicId, look.Metallic);
+                material.SetFloat(SmoothnessId, look.Smoothness);
             }
         }
 

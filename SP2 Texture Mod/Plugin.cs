@@ -42,6 +42,9 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedHeight;
         internal static ConfigEntry<string> SelectedSpecular;
         internal static ConfigEntry<bool> AutoApply;
+        internal static ConfigEntry<string> SelectedMetalness;
+        internal static ConfigEntry<string> SelectedRoughness;
+        internal static ConfigEntry<bool> UseLitShader;
         internal static ConfigEntry<float> SpecularGain;
         internal static ConfigEntry<float> NormalStrength;
         internal static ConfigEntry<bool> FlipNormalGreen;
@@ -96,6 +99,13 @@ namespace SP2TextureMod
             SelectedSpecular = Config.Bind("Maps", "SelectedSpecular", "auto",
                 "File name of the specular map; 'auto' = the one named like the albedo image with _n_s, _s, _spec, _specular...; 'none' = none (set by the panel). "
                 + "The part shader has no specular map, so only the average of the image is used (see SpecularGain).");
+            SelectedMetalness = Config.Bind("Maps", "SelectedMetalness", "auto",
+                "File name of the metalness map; 'auto' = found by name (_metallic, @channels=B...); 'none' = none (set by the panel).");
+            SelectedRoughness = Config.Bind("Maps", "SelectedRoughness", "auto",
+                "File name of the roughness map; 'auto' = found by name (_roughness, @channels=G...); 'none' = none (set by the panel).");
+            UseLitShader = Config.Bind("Material", "UseLitShader", false,
+                "Experimental. Draw the textured parts with the game's URP Lit shader instead of the part shader. Lit reads metalness and roughness "
+                + "maps per pixel (the part shader only has one value for the whole craft), but it lacks the part shader's own features and may look different.");
             SpecularGain = Config.Bind("Maps", "SpecularGain", 2f,
                 new ConfigDescription("How much the average brightness of the specular map adds to the smoothness (smoothness = Smoothness + average x this). "
                     + "0 ignores the specular map.", new AcceptableValueRange<float>(0f, 6f)));

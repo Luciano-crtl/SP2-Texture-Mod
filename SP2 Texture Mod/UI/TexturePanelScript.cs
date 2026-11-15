@@ -157,11 +157,13 @@ namespace SP2TextureMod.UI
 
         private void BuildMaps()
         {
-            builder.Header("Maps (normal, occlusion, specular, height)", collapsed: true);
+            builder.Header("Maps (normal, occlusion, metalness, roughness, height)", collapsed: true);
             builder.Text("Note", "The part shader reads a normal, an occlusion and a height map. They are found by name next to the albedo image (_n_n, _n_ao, _n_s, _n, _ao, _h or _bump) or chosen here. It has no specular map: only the average of that image is used.");
             MapRows(TextureLibrary.Normal);
             MapRows(TextureLibrary.Occlusion);
             MapRows(TextureLibrary.Specular);
+            MapRows(TextureLibrary.Metalness);
+            MapRows(TextureLibrary.Roughness);
             MapRows(TextureLibrary.Height);
 
             FloatSetting(Plugin.NormalStrength, "Normal strength", "How strong the relief of the normal map is.",
@@ -213,7 +215,16 @@ namespace SP2TextureMod.UI
         private void BuildMaterial()
         {
             builder.Header("Material (metallic, smoothness)", collapsed: true);
-            builder.Text("Note", "One value for all of the textured parts: the part shader has no metallic, smoothness or specular map.");
+            builder.Text("Note", "With the part shader the metalness and roughness maps only give one value for the whole craft. The URP Lit shader reads them per pixel.");
+            builder.Toggle("Use the URP Lit shader (experimental)",
+                "Draws the textured parts with Unity's Lit shader: metalness and roughness maps work per pixel. It may look different from the game's part shader (no damage or paint features). If parts turn pink, turn it off.",
+                Plugin.UseLitShader.Value,
+                on =>
+                {
+                    SetValue(Plugin.UseLitShader, on);
+                    SaveConfig();
+                    AtlasApplier.ReapplyIfActive();
+                });
             FloatSetting(Plugin.Metallic, "Metallic", "How metallic the textured parts look.",
                 0.01f, 0f, 1f, "", AtlasApplier.SaveAssignment, AtlasApplier.RefreshMaterial);
             FloatSetting(Plugin.Smoothness, "Smoothness", "How glossy the textured parts look.",

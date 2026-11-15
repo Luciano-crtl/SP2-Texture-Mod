@@ -63,6 +63,11 @@ namespace SP2TextureMod
         private static bool _specularLoaded;
         private static float _specularAverage;
         private static AtlasMaterial.SpecularKind _specularKind;
+        private static Texture2D _metalSmoothMap;   // Lit only: metallic in R, smoothness in A
+        private static bool _metalLoaded;
+        private static float _metalAverage;
+        private static bool _roughLoaded;
+        private static float _roughAverage;
         private static string _modelProblem = "";
         private static AtlasLook _look = new AtlasLook();
         private static AircraftScript _activeAircraft;
@@ -351,6 +356,11 @@ namespace SP2TextureMod
             a.Occlusion = TextureLibrary.Occlusion.CurrentName ?? "";
             a.Height = TextureLibrary.Height.CurrentName ?? "";
             a.Specular = TextureLibrary.Specular.CurrentName ?? "";
+            a.MetallicMap = TextureLibrary.Metalness.CurrentName ?? "";
+            a.RoughnessMap = TextureLibrary.Roughness.CurrentName ?? "";
+            a.UseLit = _look.UseLit;
+            a.MetalAverage = _metalLoaded ? _metalAverage : 0f;
+            a.RoughAverage = _roughLoaded ? _roughAverage : 0f;
             a.TilesPerMeter = Plugin.TilesPerMeter.Value;
             a.FlipModelX = Plugin.FlipModelX.Value;
 
@@ -1332,14 +1342,22 @@ namespace SP2TextureMod
                 map.OriginalMaterials = Fill(count, atlas);
 
                 // The highlight copies (designer only) must carry the texture too, or hovering a part would hide it.
-                if (rs.OriginalHighlight != null)
+                try
                 {
-                    map.HighlightMaterials = Fill(count, theme.InitializeHighlightMaterial(atlas));
-                }
+                    if (rs.OriginalHighlight != null)
+                    {
+                        map.HighlightMaterials = Fill(count, theme.InitializeHighlightMaterial(atlas));
+                    }
 
-                if (rs.OriginalSelected != null)
+                    if (rs.OriginalSelected != null)
+                    {
+                        map.SelectedMaterials = Fill(count, theme.InitializeHighlightSelectedMaterial(atlas));
+                    }
+                }
+                catch (Exception ex)
                 {
-                    map.SelectedMaterials = Fill(count, theme.InitializeHighlightSelectedMaterial(atlas));
+                    // The part keeps the game's own highlight (it shows the plain paint while hovered).
+                    Plugin.Log.LogWarning(Tag + "highlight material not made: " + ex.Message);
                 }
 
                 // In flight the game merges meshes that share a material; a private material must not be merged.
@@ -1433,6 +1451,8 @@ namespace SP2TextureMod
                         Plugin.Log.LogWarning(Tag + "specular map '" + specular.FileName + "' not used: " + note);
                     }
                 }
+
+                LoadMetalRough();
             }
             catch (Exception ex)
             {
@@ -1474,6 +1494,69 @@ namespace SP2TextureMod
             _heightMap = null;
             _specularLoaded = false;
             _specularAverage = 0f;
+            if (_metalSmoothMap != null)
+            {
+                UnityEngine.Object.Destroy(_metalSmoothMap);
+            }
+
+            _metalSmoothMap = null;
+            _metalLoaded = false;
+            _roughLoaded = false;
+            _metalAverage = 0f;
+            _roughAverage = 0f;
+        }
+
+        // The metalness and roughness images (each a channel of an image: see MapTextures.ChannelFor). With the URP Lit shader
+        // they are packed into one per-pixel map; otherwise only their averages are used (one value for the whole craft).
+        private static void LoadMetalRough()
+        {
+            TextureLibrary.Entry metal = TextureLibrary.Metalness.Current;
+            TextureLibrary.Entry rough = TextureLibrary.Roughness.Current;
+            if (metal == null && rough == null)
+            {
+                return;
+            }
+
+            byte[] m = null;
+            byte[] r = null;
+            int mw = 0, mh = 0, rw = 0, rh = 0;
+            string note;
+            if (metal != null)
+            {
+                m = MapTextures.ReadChannel(metal.FilePath, MapTextures.ChannelFor(metal.FileName, true), out mw, out mh, out note);
+                if (m != null)
+                {
+                    _metalLoaded = true;
+                    _metalAverage = MapTextures.Average(m);
+                    Plugin.Log.LogInfo(Tag + "metalness map '" + metal.FileName + "': " + note);
+                }
+                else
+                {
+                    Plugin.Log.LogWarning(Tag + "metalness map '" + metal.FileName + "' not used: " + note);
+                }
+            }
+
+            if (rough != null)
+            {
+                r = MapTextures.ReadChannel(rough.FilePath, MapTextures.ChannelFor(rough.FileName, false), out rw, out rh, out note);
+                if (r != null)
+                {
+                    _roughLoaded = true;
+                    _roughAverage = MapTextures.Average(r);
+                    Plugin.Log.LogInfo(Tag + "roughness map '" + rough.FileName + "': " + note);
+                }
+                else
+                {
+                    Plugin.Log.LogWarning(Tag + "roughness map '" + rough.FileName + "' not used: " + note);
+                }
+            }
+
+            if (Plugin.UseLitShader.Value && AtlasMaterial.LitShader != null && (m != null || r != null))
+            {
+                _metalSmoothMap = MapTextures.PackMetalSmooth(m, mw, mh, r, rw, rh, Plugin.Metallic.Value, Plugin.Smoothness.Value);
+                Plugin.Log.LogInfo(Tag + "metallic (R) and smoothness (A) packed for the URP Lit shader" + (_metalSmoothMap != null
+                    ? ": " + _metalSmoothMap.width + "x" + _metalSmoothMap.height : " failed"));
+            }
         }
 
         private static string MapsSummary()
@@ -1483,6 +1566,9 @@ namespace SP2TextureMod
             if (_occlusionMap != null) text += (text.Length > 0 ? ", " : "") + "occlusion";
             if (_specularLoaded) text += (text.Length > 0 ? ", " : "") + _specularKind.ToString().ToLowerInvariant() + " (average only)";
             if (_heightMap != null) text += (text.Length > 0 ? ", " : "") + "height";
+            if (_metalLoaded) text += (text.Length > 0 ? ", " : "") + "metalness" + (_metalSmoothMap != null ? " (per pixel)" : " (average)");
+            if (_roughLoaded) text += (text.Length > 0 ? ", " : "") + "roughness" + (_metalSmoothMap != null ? " (per pixel)" : " (average)");
+            if (_look.UseLit) text += " | URP Lit";
             return text.Length > 0 ? text : "none";
         }
 
@@ -1493,6 +1579,8 @@ namespace SP2TextureMod
             _look.Normal = _normalMap;
             _look.Occlusion = _occlusionMap;
             _look.Height = _heightMap;
+            _look.MetalSmooth = _metalSmoothMap;
+            _look.UseLit = Plugin.UseLitShader.Value && AtlasMaterial.LitShader != null;
             UpdateLookValues();
         }
 
@@ -1505,6 +1593,8 @@ namespace SP2TextureMod
             float metallic = Plugin.Metallic.Value;
             float smoothness = Plugin.Smoothness.Value;
             AtlasMaterial.FromSpecularMap(_specularKind, _specularAverage, Plugin.SpecularGain.Value, _specularLoaded, ref metallic, ref smoothness);
+            if (_metalLoaded) metallic = Mathf.Clamp01(metallic + _metalAverage);
+            if (_roughLoaded) smoothness = Mathf.Clamp01(smoothness + 1f - _roughAverage);
             _look.Metallic = metallic;
             _look.Smoothness = smoothness;
         }

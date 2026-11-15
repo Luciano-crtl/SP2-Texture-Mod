@@ -31,13 +31,15 @@ namespace SP2TextureMod
             public readonly string Label;
             public readonly string[] Suffixes;
             public readonly Func<ConfigEntry<string>> Setting;
+            public readonly Func<string, bool> NameFits; // on a lower-case file name without extension: does it look like this map?
             public int Index = -1; // -1 = none; otherwise an index into AllImages
 
-            public MapSlot(string label, string[] suffixes, Func<ConfigEntry<string>> setting)
+            public MapSlot(string label, string[] suffixes, Func<ConfigEntry<string>> setting, Func<string, bool> nameFits)
             {
                 Label = label;
                 Suffixes = suffixes;
                 Setting = setting;
+                NameFits = nameFits;
             }
 
             public Entry Current
@@ -54,19 +56,38 @@ namespace SP2TextureMod
         // The endings include the ones of the sets exported from War Thunder (fw_190d_9_a, fw_190d_9_n_n,
         // fw_190d_9_n_ao, fw_190d_9_n_s) as well as the usual ones.
         public static readonly MapSlot Normal = new MapSlot("Normal map",
-            new[] { "_n_n", "_n", "_nrm", "_nm", "_normal", "_normals", "_norm" }, () => Plugin.SelectedNormal);
+            new[] { "_n_n", "_n", "_nrm", "_nm", "_normal", "_normals", "_norm" }, () => Plugin.SelectedNormal,
+            n => n.Contains("normal"));
         public static readonly MapSlot Occlusion = new MapSlot("Occlusion map",
-            new[] { "_n_ao", "_ao", "_occ", "_occlusion", "_ambientocclusion" }, () => Plugin.SelectedOcclusion);
-        public static readonly MapSlot Specular = new MapSlot("Specular / metalness / roughness map",
-            new[] { "_n_s", "_s", "_spec", "_specular", "_gloss", "_smoothness", "_metallic" }, () => Plugin.SelectedSpecular);
+            new[] { "_n_ao", "_ao", "_occ", "_occlusion", "_ambientocclusion" }, () => Plugin.SelectedOcclusion,
+            n => n.Contains("occlusion") || n.EndsWith("_ao", StringComparison.Ordinal));
+        public static readonly MapSlot Specular = new MapSlot("Specular / gloss map",
+            new[] { "_n_s", "_s", "_spec", "_specular", "_gloss", "_smoothness" }, () => Plugin.SelectedSpecular,
+            n => n.Contains("spec") || n.Contains("gloss") || n.Contains("smooth"));
+        // A converter that splits a glTF metallic-roughness image writes "...@channels=B" (metallic) and "...@channels=G"
+        // (roughness); a single image named with both words has metallic in blue and roughness in green.
+        public static readonly MapSlot Metalness = new MapSlot("Metalness map",
+            new[] { "_metallic", "_metalness", "_metal", "_met" }, () => Plugin.SelectedMetalness,
+            n => n.Contains("metal") && ChannelTagIs(n, 'b'));
+        public static readonly MapSlot Roughness = new MapSlot("Roughness map",
+            new[] { "_roughness", "_rough" }, () => Plugin.SelectedRoughness,
+            n => n.Contains("rough") && ChannelTagIs(n, 'g'));
         public static readonly MapSlot Height = new MapSlot("Height (bump) map",
-            new[] { "_h", "_height", "_disp", "_displacement", "_bump", "_parallax" }, () => Plugin.SelectedHeight);
+            new[] { "_h", "_height", "_disp", "_displacement", "_bump", "_parallax" }, () => Plugin.SelectedHeight,
+            n => n.Contains("height") || n.Contains("bump") || n.Contains("displace"));
 
-        private static readonly MapSlot[] Slots = { Normal, Occlusion, Specular, Height };
+        private static readonly MapSlot[] Slots = { Normal, Occlusion, Specular, Metalness, Roughness, Height };
+
+        // "...@channels=B": true if there is no tag, or the tag names this channel.
+        private static bool ChannelTagIs(string lowerName, char channel)
+        {
+            int tag = lowerName.IndexOf("channels=", StringComparison.Ordinal);
+            return tag < 0 || tag + 9 >= lowerName.Length || lowerName[tag + 9] == channel;
+        }
 
         // Endings that mark the albedo image of a set; removed to find the other maps of the set by name.
         private static readonly string[] AlbedoSuffixes =
-            { "_a", "_d", "_diff", "_diffuse", "_albedo", "_basecolor", "_base_color", "_color", "_col" };
+            { "_a", "_d", "_diff", "_diffuse", "_albedo", "_basecolor", "_base_color", "_color", "_col", "basecolor", "albedo", "diffuse" };
 
         private const string ReadmeMarker = "Readme version 3";
 
@@ -325,6 +346,8 @@ namespace SP2TextureMod
             SelectSlot(Normal, assignment.Normal);
             SelectSlot(Occlusion, assignment.Occlusion);
             SelectSlot(Specular, assignment.Specular);
+            SelectSlot(Metalness, assignment.MetallicMap);
+            SelectSlot(Roughness, assignment.RoughnessMap);
             SelectSlot(Height, assignment.Height);
             return true;
         }
@@ -417,6 +440,21 @@ namespace SP2TextureMod
                 }
             }
 
+            // Names that do not follow the endings (B2BaseColor, B2Normal, B2Metallic-B2Roughness@channels=B): the file starts
+            // with the set's name and its name says what it is.
+            if (stem.Length >= 2)
+            {
+                string setLower = stem.ToLowerInvariant();
+                for (int i = 0; i < AllImages.Count; i++)
+                {
+                    string lower = System.IO.Path.GetFileNameWithoutExtension(AllImages[i].FileName).ToLowerInvariant();
+                    if (AllImages[i] != albedo && lower.StartsWith(setLower, StringComparison.Ordinal) && slot.NameFits(lower))
+                    {
+                        return i;
+                    }
+                }
+            }
+
             return -1;
         }
 
@@ -425,8 +463,14 @@ namespace SP2TextureMod
         private static bool IsMapFileOfASet(Entry image)
         {
             string stem = System.IO.Path.GetFileNameWithoutExtension(image.FileName);
+            string lowerStem = stem.ToLowerInvariant();
             for (int s = 0; s < Slots.Length; s++)
             {
+                if (Slots[s].NameFits(lowerStem) && HasAlbedoStartingTheName(lowerStem, image))
+                {
+                    return true;
+                }
+
                 for (int x = 0; x < Slots[s].Suffixes.Length; x++)
                 {
                     string suffix = Slots[s].Suffixes[x];
@@ -435,6 +479,27 @@ namespace SP2TextureMod
                     {
                         return true;
                     }
+                }
+            }
+
+            return false;
+        }
+
+        // Some other image is an albedo (its name ends like one) and the given name starts with its set's name.
+        private static bool HasAlbedoStartingTheName(string lowerName, Entry except)
+        {
+            for (int i = 0; i < AllImages.Count; i++)
+            {
+                if (AllImages[i] == except)
+                {
+                    continue;
+                }
+
+                string set = SetName(AllImages[i]);
+                string stem = System.IO.Path.GetFileNameWithoutExtension(AllImages[i].FileName);
+                if (set.Length >= 2 && set.Length < stem.Length && lowerName.StartsWith(set.ToLowerInvariant(), StringComparison.Ordinal))
+                {
+                    return true;
                 }
             }
 

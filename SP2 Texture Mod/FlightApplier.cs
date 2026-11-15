@@ -358,6 +358,32 @@ namespace SP2TextureMod
             float smoothness = a.Smoothness;
             AtlasMaterial.FromSpecularMap((AtlasMaterial.SpecularKind)a.SpecularKind, a.SpecularAverage, a.SpecularGain,
                 a.Specular.Length > 0, ref metallic, ref smoothness);
+            if (a.MetallicMap.Length > 0) metallic = Mathf.Clamp01(metallic + a.MetalAverage);
+            if (a.RoughnessMap.Length > 0) smoothness = Mathf.Clamp01(smoothness + 1f - a.RoughAverage);
+
+            // The URP Lit shader reads metallic and smoothness per pixel: the two images are packed into one map.
+            s.Look.UseLit = a.UseLit;
+            if (a.UseLit && (a.MetallicMap.Length > 0 || a.RoughnessMap.Length > 0))
+            {
+                try
+                {
+                    string metalPath = TextureLibrary.PathFor(a.MetallicMap);
+                    string roughPath = TextureLibrary.PathFor(a.RoughnessMap);
+                    byte[] m = null;
+                    byte[] r = null;
+                    int mw = 0, mh = 0, rw = 0, rh = 0;
+                    if (metalPath != null) m = MapTextures.ReadChannel(metalPath, MapTextures.ChannelFor(a.MetallicMap, true), out mw, out mh, out note);
+                    if (roughPath != null) r = MapTextures.ReadChannel(roughPath, MapTextures.ChannelFor(a.RoughnessMap, false), out rw, out rh, out note);
+                    s.Look.MetalSmooth = MapTextures.PackMetalSmooth(m, mw, mh, r, rw, rh, a.Metallic, a.Smoothness);
+                    Plugin.Log.LogInfo(Tag + "metallic and smoothness maps packed for the URP Lit shader: "
+                        + (s.Look.MetalSmooth != null ? s.Look.MetalSmooth.width + "x" + s.Look.MetalSmooth.height : "failed"));
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogWarning(Tag + "could not read the metalness/roughness maps: " + ex.Message);
+                }
+            }
+
             s.Look.Metallic = metallic;
             s.Look.Smoothness = smoothness;
 
@@ -701,6 +727,7 @@ namespace SP2TextureMod
             DestroyTexture(ref s.Look.Normal);
             DestroyTexture(ref s.Look.Occlusion);
             DestroyTexture(ref s.Look.Height);
+            DestroyTexture(ref s.Look.MetalSmooth);
         }
 
         private static void DestroyTexture(ref Texture2D texture)

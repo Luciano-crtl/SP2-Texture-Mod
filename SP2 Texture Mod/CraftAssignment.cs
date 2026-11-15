@@ -24,6 +24,11 @@ namespace SP2TextureMod
         public string Occlusion = "";
         public string Height = "";
         public string Specular = "";
+        public string MetallicMap = "";
+        public string RoughnessMap = "";
+        public bool UseLit;          // drawn with the URP Lit shader (per-pixel metallic and smoothness)
+        public float MetalAverage;   // averages of the two maps, for the part shader (one value for the craft)
+        public float RoughAverage;
 
         public float TilesPerMeter = 1f;
         public bool FlipModelX = true;
@@ -135,6 +140,11 @@ namespace SP2TextureMod
                 a.Occlusion = Text(values, "occlusion", "");
                 a.Height = Text(values, "height", "");
                 a.Specular = Text(values, "specular", "");
+                a.MetallicMap = Text(values, "metallicMap", "");
+                a.RoughnessMap = Text(values, "roughnessMap", "");
+                a.UseLit = Flag(values, "useLit", false);
+                a.MetalAverage = Number(values, "metalAverage", 0f);
+                a.RoughAverage = Number(values, "roughAverage", 0f);
                 a.TilesPerMeter = Number(values, "tilesPerMeter", 1f);
                 a.FlipModelX = Flag(values, "flipModelX", true);
 
@@ -215,6 +225,11 @@ namespace SP2TextureMod
                 Put(sb, "occlusion", Occlusion);
                 Put(sb, "height", Height);
                 Put(sb, "specular", Specular);
+                Put(sb, "metallicMap", MetallicMap);
+                Put(sb, "roughnessMap", RoughnessMap);
+                Put(sb, "useLit", B(UseLit));
+                Put(sb, "metalAverage", N(MetalAverage));
+                Put(sb, "roughAverage", N(RoughAverage));
                 Put(sb, "tilesPerMeter", N(TilesPerMeter));
                 Put(sb, "flipModelX", B(FlipModelX));
 
@@ -343,6 +358,7 @@ namespace SP2TextureMod
             Plugin.Set(Plugin.Metallic, Metallic);
             Plugin.Set(Plugin.Smoothness, Smoothness);
             Plugin.Set(Plugin.SpecularGain, SpecularGain);
+            Plugin.Set(Plugin.UseLitShader, UseLit);
             Plugin.SaveConfig();
             return true;
         }

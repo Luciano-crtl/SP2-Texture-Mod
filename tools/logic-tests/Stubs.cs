@@ -95,6 +95,8 @@ namespace SP2TextureMod
         public static ConfigEntry<string> SelectedNormal = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedOcclusion = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedSpecular = new ConfigEntry<string>("auto");
+        public static ConfigEntry<string> SelectedMetalness = new ConfigEntry<string>("auto");
+        public static ConfigEntry<string> SelectedRoughness = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedHeight = new ConfigEntry<string>("auto");
         public static ConfigEntry<float> TilesPerMeter = new ConfigEntry<float>(1f), RayStart = new ConfigEntry<float>(0f), FacingWeight = new ConfigEntry<float>(0f),
             MaxMatchDistance = new ConfigEntry<float>(0f), AdjustOffsetX = new ConfigEntry<float>(0f), AdjustOffsetY = new ConfigEntry<float>(0f), AdjustOffsetZ = new ConfigEntry<float>(0f),
@@ -102,7 +104,7 @@ namespace SP2TextureMod
             NormalStrength = new ConfigEntry<float>(1f), BumpStrength = new ConfigEntry<float>(3f), OcclusionStrength = new ConfigEntry<float>(1f), ParallaxHeight = new ConfigEntry<float>(0f),
             Metallic = new ConfigEntry<float>(0f), Smoothness = new ConfigEntry<float>(0f), SpecularGain = new ConfigEntry<float>(2f);
         public static ConfigEntry<bool> FlipModelX = new ConfigEntry<bool>(true), ProjectAlongNormals = new ConfigEntry<bool>(true), FlipNormalGreen = new ConfigEntry<bool>(false),
-            RebuildNormalZ = new ConfigEntry<bool>(true), HeightToNormal = new ConfigEntry<bool>(false), UseParallax = new ConfigEntry<bool>(false);
+            RebuildNormalZ = new ConfigEntry<bool>(true), HeightToNormal = new ConfigEntry<bool>(false), UseParallax = new ConfigEntry<bool>(false), UseLitShader = new ConfigEntry<bool>(false);
         public static void Set<T>(ConfigEntry<T> entry, T value) { entry.Value = value; }
         public static void SaveConfig() { }
     }
