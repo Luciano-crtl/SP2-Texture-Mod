@@ -42,6 +42,7 @@ namespace SP2TextureMod
         internal static ConfigEntry<string> SelectedHeight;
         internal static ConfigEntry<string> SelectedSpecular;
         internal static ConfigEntry<bool> AutoApply;
+        internal static ConfigEntry<string> SelectedSet;
         internal static ConfigEntry<string> SelectedMetalness;
         internal static ConfigEntry<string> SelectedRoughness;
         internal static ConfigEntry<bool> UseLitShader;
@@ -80,6 +81,8 @@ namespace SP2TextureMod
             PanelKey = Config.Bind("Keys", "PanelKey", Key.Insert,
                 "Opens or closes the Textures panel while a craft is open in the designer. The panel also has a button in the designer's main menu. Use None for no key at all.");
 
+            SelectedSet = Config.Bind("Texture", "SelectedSet", "",
+                "The folder (set) inside TextureMod that is in use: its name, or '.' for the files left in the main folder (set by the panel).");
             SelectedTexture = Config.Bind("Texture", "SelectedTexture", "",
                 "File name of the selected image (set by the panel).");
             SelectedModel = Config.Bind("Texture", "SelectedModel", "auto",

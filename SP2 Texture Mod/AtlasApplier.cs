@@ -350,14 +350,14 @@ namespace SP2TextureMod
 
             bool transfer = TransferActive;
             CraftAssignment a = new CraftAssignment();
-            a.Image = image.FileName;
-            a.Model = transfer ? System.IO.Path.GetFileName(_modelPath) : "";
-            a.Normal = TextureLibrary.Normal.CurrentName ?? "";
-            a.Occlusion = TextureLibrary.Occlusion.CurrentName ?? "";
-            a.Height = TextureLibrary.Height.CurrentName ?? "";
-            a.Specular = TextureLibrary.Specular.CurrentName ?? "";
-            a.MetallicMap = TextureLibrary.Metalness.CurrentName ?? "";
-            a.RoughnessMap = TextureLibrary.Roughness.CurrentName ?? "";
+            a.Image = image.Relative;
+            a.Model = transfer ? TextureLibrary.RelativeOf(_modelPath) : "";
+            a.Normal = TextureLibrary.Normal.CurrentRelative ?? "";
+            a.Occlusion = TextureLibrary.Occlusion.CurrentRelative ?? "";
+            a.Height = TextureLibrary.Height.CurrentRelative ?? "";
+            a.Specular = TextureLibrary.Specular.CurrentRelative ?? "";
+            a.MetallicMap = TextureLibrary.Metalness.CurrentRelative ?? "";
+            a.RoughnessMap = TextureLibrary.Roughness.CurrentRelative ?? "";
             a.UseLit = _look.UseLit;
             a.MetalAverage = _metalLoaded ? _metalAverage : 0f;
             a.RoughAverage = _roughLoaded ? _roughAverage : 0f;

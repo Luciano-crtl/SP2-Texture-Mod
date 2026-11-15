@@ -75,9 +75,24 @@ namespace SP2TextureMod.UI
 
         private void BuildFiles()
         {
-            builder.Header("Image and model");
+            builder.Header("Folder (set), model and image");
             builder.Text("Mod version", Plugin.Version + " (phase " + Plugin.Phase + ")");
             builder.Text("Folder", TextureLibrary.Folder);
+
+            // One folder per aircraft: the model, the colour image and the other maps are found by themselves.
+            Live("Set", () =>
+            {
+                string name = TextureLibrary.CurrentSetName;
+                return name == null
+                    ? "none found: make a folder here with a model and its images"
+                    : (TextureLibrary.SetIndex + 1) + "/" + TextureLibrary.SetCount + "  " + name;
+            });
+            builder.Buttons(new List<KeyValuePair<string, Action>>
+            {
+                new KeyValuePair<string, Action>("Previous set", () => ChangeSet(-1)),
+                new KeyValuePair<string, Action>("Next set", () => ChangeSet(1)),
+            });
+            Live("Model problem", () => TextureLibrary.ModelProblem ?? "");
 
             Live("Image", () =>
             {
@@ -313,6 +328,14 @@ namespace SP2TextureMod.UI
         }
 
         // ---- Actions -------------------------------------------------------------
+
+        private void ChangeSet(int delta)
+        {
+            TextureLibrary.StepSet(delta);
+            AtlasApplier.InvalidateFit();
+            AtlasApplier.ReapplyIfActive();
+            rebuildRequested = true;
+        }
 
         private static void ChangeImage(int delta)
         {

@@ -95,6 +95,7 @@ namespace SP2TextureMod
         public static ConfigEntry<string> SelectedNormal = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedOcclusion = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedSpecular = new ConfigEntry<string>("auto");
+        public static ConfigEntry<string> SelectedSet = new ConfigEntry<string>("");
         public static ConfigEntry<string> SelectedMetalness = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedRoughness = new ConfigEntry<string>("auto");
         public static ConfigEntry<string> SelectedHeight = new ConfigEntry<string>("auto");

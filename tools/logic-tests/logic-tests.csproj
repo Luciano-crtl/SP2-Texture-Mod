@@ -13,6 +13,8 @@
     <Compile Include="../../SP2 Texture Mod/TextureLibrary.cs" />
     <Compile Include="../../SP2 Texture Mod/CraftAssignment.cs" />
     <Compile Include="../../SP2 Texture Mod/ObjModel.cs" />
+    <Compile Include="../../SP2 Texture Mod/Json.cs" />
+    <Compile Include="../../SP2 Texture Mod/GltfDocument.cs" />
     <Compile Include="../../SP2 Texture Mod/UvCache.cs" />
     <Compile Include="Stubs.cs" />
     <Compile Include="Tests.cs" />

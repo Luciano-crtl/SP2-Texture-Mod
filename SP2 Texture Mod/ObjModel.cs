@@ -91,15 +91,27 @@ namespace SP2TextureMod
                 }
             }
 
+            return Finish(Path.GetFileName(path), "OBJ", ta, tb, tc, ua, ub, uc, complete, uvs.Count, badLines, out error);
+        }
+
+        /// <summary>
+        /// Turns a triangle soup (one UV per corner, a flag per triangle telling whether all three corners had one) into a
+        /// model: refuses a soup with almost no UVs, leaves out the triangles without, takes the bounds and brings the
+        /// texture coordinates into place. Shared by the OBJ and the glTF readers.
+        /// </summary>
+        internal static ObjModel Finish(string name, string tag, List<Vector3> ta, List<Vector3> tb, List<Vector3> tc,
+            List<Vector2> ua, List<Vector2> ub, List<Vector2> uc, List<bool> complete, int uvCount, int badLines, out string error)
+        {
+            error = null;
             if (ta.Count == 0)
             {
                 error = "the file has no faces (f lines)";
                 return null;
             }
 
-            if (uvs.Count == 0)
+            if (uvCount == 0)
             {
-                error = "the file has no texture coordinates (vt lines); export the OBJ with UVs";
+                error = "the file has no texture coordinates (vt lines); export the model with UVs";
                 return null;
             }
 
@@ -113,14 +125,14 @@ namespace SP2TextureMod
 
             if (withUv == 0 || withUv < 0.2 * ta.Count)
             {
-                error = "only " + withUv + " of " + ta.Count + " triangles have texture coordinates (the file has " + uvs.Count
-                    + " vt lines); export the OBJ with UVs";
+                error = "only " + withUv + " of " + ta.Count + " triangles have texture coordinates (the file has " + uvCount
+                    + " vt lines); export the model with UVs";
                 return null;
             }
 
             if (withUv < ta.Count)
             {
-                Plugin.Log.LogWarning("[OBJ] " + Path.GetFileName(path) + ": " + (ta.Count - withUv) + " of " + ta.Count
+                Plugin.Log.LogWarning("[" + tag + "] " + name + ": " + (ta.Count - withUv) + " of " + ta.Count
                     + " triangles have no texture coordinates and were left out (probably other objects of the file)");
                 int kept = 0;
                 for (int i = 0; i < ta.Count; i++)
@@ -136,7 +148,7 @@ namespace SP2TextureMod
             }
 
             ObjModel model = new ObjModel();
-            model.Name = Path.GetFileName(path);
+            model.Name = name;
             model.A = ta.ToArray();
             model.B = tb.ToArray();
             model.C = tc.ToArray();
@@ -184,12 +196,12 @@ namespace SP2TextureMod
 
             model.UvRange = "u " + uvMin.x.ToString("0.###", CultureInfo.InvariantCulture) + ".." + uvMax.x.ToString("0.###", CultureInfo.InvariantCulture)
                 + ", v " + uvMin.y.ToString("0.###", CultureInfo.InvariantCulture) + ".." + uvMax.y.ToString("0.###", CultureInfo.InvariantCulture);
-            Plugin.Log.LogInfo("[OBJ] " + model.Name + ": texture coordinates " + model.UvRange
+            Plugin.Log.LogInfo("[" + tag + "] " + model.Name + ": texture coordinates " + model.UvRange
                 + " after shifting them by (" + shiftU.ToString("0", CultureInfo.InvariantCulture) + ", " + shiftV.ToString("0", CultureInfo.InvariantCulture) + ")");
 
             if (badLines > 0)
             {
-                Plugin.Log.LogWarning("[OBJ] " + model.Name + ": " + badLines + " line(s) could not be read and were skipped");
+                Plugin.Log.LogWarning("[" + tag + "] " + model.Name + ": " + badLines + " line(s) could not be read and were skipped");
             }
 
             return model;
@@ -662,7 +674,7 @@ namespace SP2TextureMod
             shiftV = -Mathf.Floor(vs[vs.Count / 2]);
         }
 
-        private static void AddTriangle(List<Vector3> ta, List<Vector3> tb, List<Vector3> tc,
+        internal static void AddTriangle(List<Vector3> ta, List<Vector3> tb, List<Vector3> tc,
             List<Vector2> ua, List<Vector2> ub, List<Vector2> uc,
             Vector3 pa, Vector3 pb, Vector3 pc, Vector2 uva, Vector2 uvb, Vector2 uvc, bool flipX)
         {

@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.IO;
 using UnityEngine;
 
 namespace SP2TextureMod
@@ -42,7 +43,7 @@ namespace SP2TextureMod
                 {
                     System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
                     string loadError;
-                    ObjModel loaded = ObjModel.Load(path, flip, out loadError);
+                    ObjModel loaded = IsGltf(path) ? LoadGltf(path, flip, out loadError) : ObjModel.Load(path, flip, out loadError);
                     if (loaded == null)
                     {
                         error = loadError;
@@ -73,6 +74,29 @@ namespace SP2TextureMod
                 Plugin.Log.LogWarning("[TEX] model not used: " + ex.Message);
                 return false;
             }
+        }
+
+        /// <summary>A .glb or .gltf file.</summary>
+        public static bool IsGltf(string path)
+        {
+            return GltfDocument.IsGltf(path);
+        }
+
+        private static ObjModel LoadGltf(string path, bool flip, out string error)
+        {
+            GltfDocument document = GltfDocument.Open(path, out error);
+            if (document == null)
+            {
+                return null;
+            }
+
+            GltfDocument.Primary primary = document.FindPrimary(out error);
+            if (primary == null)
+            {
+                return null;
+            }
+
+            return document.BuildModel(primary, flip, out error);
         }
 
         private static string F(float value)

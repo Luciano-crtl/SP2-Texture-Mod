@@ -31,6 +31,7 @@ internal static class Program
         SavedCraftFile();
         ObjReading();
         UvCacheFile();
+        GltfAndSets();
 
         Console.WriteLine(failures == 0 ? "ALL PASSED" : failures + " FAILED");
         return failures;
@@ -51,7 +52,7 @@ internal static class Program
         Check(TextureLibrary.Specular.CurrentName == "fw_190d_9_n_s.jpg", "specular = " + TextureLibrary.Specular.CurrentName);
         Check(TextureLibrary.Height.CurrentName == null, "height = none");
         string readme = Path.Combine(TextureLibrary.Folder, "README.txt");
-        Check(File.Exists(readme) && File.ReadAllText(readme).Contains("Readme version 3"), "README written");
+        Check(File.Exists(readme) && File.ReadAllText(readme).Contains("Readme version 4"), "README written");
 
         // Stepping through the images keeps the maps on "auto" (an old build saved "none").
         TextureLibrary.StepImage(1);
@@ -227,6 +228,167 @@ internal static class Program
         saved.Image = "x.png";
         saved.Save("cache craft: wings?");
         Check(CraftAssignment.Delete("cache craft: wings?") && !File.Exists(CraftAssignment.UvFilePathFor("cache craft: wings?")), "Delete also removes the saved coordinates");
+    }
+
+    // ------------------------------------------------------------------ JSON, glTF / GLB and folders (sets)
+
+    static void Reset()
+    {
+        string folder = TextureLibrary.Folder;
+        if (Directory.Exists(folder)) Directory.Delete(folder, true);
+        Directory.CreateDirectory(folder);
+    }
+
+    static byte[] Png(byte tag)
+    {
+        byte[] b = new byte[16];
+        b[0] = 0x89; b[1] = (byte)'P'; b[2] = (byte)'N'; b[3] = (byte)'G'; b[8] = tag;
+        return b;
+    }
+
+    // A glTF with a quad (material 0: airframe, images 0 base, 1 normal, 2 occlusion-metallic-roughness) and a triangle of
+    // another material (glass, image 3), on a node translated by (1, 2, 3).
+    static byte[] BuildBinary()
+    {
+        List<byte> bin = new List<byte>();
+        foreach (float f in new float[] { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 }) bin.AddRange(BitConverter.GetBytes(f));
+        foreach (float f in new float[] { 0, 0, 1, 0, 1, 1, 0, 1 }) bin.AddRange(BitConverter.GetBytes(f));
+        foreach (ushort i in new ushort[] { 0, 1, 2, 0, 2, 3 }) bin.AddRange(BitConverter.GetBytes(i));
+        foreach (ushort i in new ushort[] { 0, 1, 2 }) bin.AddRange(BitConverter.GetBytes(i));
+        bin.AddRange(new byte[2]); // padding to 100
+        bin.AddRange(Png(1)); bin.AddRange(Png(2)); bin.AddRange(Png(3)); bin.AddRange(Png(4));
+        return bin.ToArray();
+    }
+
+    static string BuildJson(string bufferUri)
+    {
+        return "{\"asset\":{\"version\":\"2.0\"},\"scene\":0,\"scenes\":[{\"nodes\":[0]}],"
+            + "\"nodes\":[{\"mesh\":0,\"translation\":[1,2,3]}],"
+            + "\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"indices\":2,\"material\":0},"
+            + "{\"attributes\":{\"POSITION\":0,\"TEXCOORD_0\":1},\"indices\":3,\"material\":1}]}],"
+            + "\"materials\":[{\"name\":\"airframe\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":0},\"metallicRoughnessTexture\":{\"index\":2}},"
+            + "\"normalTexture\":{\"index\":1},\"occlusionTexture\":{\"index\":2}},"
+            + "{\"name\":\"glass\",\"pbrMetallicRoughness\":{\"baseColorTexture\":{\"index\":3}}}],"
+            + "\"textures\":[{\"source\":0},{\"source\":1},{\"source\":2},{\"source\":3}],"
+            + "\"images\":[{\"bufferView\":4,\"mimeType\":\"image/png\"},{\"bufferView\":5},{\"bufferView\":6},{\"bufferView\":7}],"
+            + "\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":4,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5126,\"count\":4,\"type\":\"VEC2\"},"
+            + "{\"bufferView\":2,\"componentType\":5123,\"count\":6,\"type\":\"SCALAR\"},{\"bufferView\":3,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],"
+            + "\"bufferViews\":[{\"buffer\":0,\"byteOffset\":0,\"byteLength\":48},{\"buffer\":0,\"byteOffset\":48,\"byteLength\":32},{\"buffer\":0,\"byteOffset\":80,\"byteLength\":12},"
+            + "{\"buffer\":0,\"byteOffset\":92,\"byteLength\":6},{\"buffer\":0,\"byteOffset\":100,\"byteLength\":16},{\"buffer\":0,\"byteOffset\":116,\"byteLength\":16},"
+            + "{\"buffer\":0,\"byteOffset\":132,\"byteLength\":16},{\"buffer\":0,\"byteOffset\":148,\"byteLength\":16}],"
+            + "\"buffers\":[{\"byteLength\":164" + (bufferUri != null ? ",\"uri\":\"" + bufferUri + "\"" : "") + "}]}";
+    }
+
+    static void WriteGlb(string path)
+    {
+        byte[] json = System.Text.Encoding.UTF8.GetBytes(BuildJson(null));
+        int padded = (json.Length + 3) & ~3;
+        byte[] bin = BuildBinary();
+        List<byte> glb = new List<byte>();
+        glb.AddRange(System.Text.Encoding.ASCII.GetBytes("glTF"));
+        glb.AddRange(BitConverter.GetBytes(2));
+        glb.AddRange(BitConverter.GetBytes(12 + 8 + padded + 8 + bin.Length));
+        glb.AddRange(BitConverter.GetBytes(padded));
+        glb.AddRange(BitConverter.GetBytes(0x4E4F534Au));
+        glb.AddRange(json);
+        for (int i = json.Length; i < padded; i++) glb.Add((byte)' ');
+        glb.AddRange(BitConverter.GetBytes(bin.Length));
+        glb.AddRange(BitConverter.GetBytes(0x004E4942u));
+        glb.AddRange(bin);
+        File.WriteAllBytes(path, glb.ToArray());
+    }
+
+    static void GltfAndSets()
+    {
+        // JSON
+        string error;
+        object parsed = Json.Parse("{\"a\":[1,2.5,-3e2,true,null,\"x\\u0041\\n\"],\"b\":{\"c\":false}}", out error);
+        Check(parsed != null && Json.Array(parsed, "a").Count == 6 && (double)Json.Array(parsed, "a")[2] == -300 && (string)Json.Array(parsed, "a")[5] == "xA\n"
+            && !Json.Bool(Json.Object(parsed, "b"), "c", true), "the JSON reader reads numbers, strings with escapes, nested values");
+        Check(Json.Parse("{\"a\":", out error) == null && error != null, "broken JSON is refused with a reason");
+
+        Reset();
+        string dir = TextureLibrary.Folder;
+        Directory.CreateDirectory(Path.Combine(dir, "glb set"));
+        WriteGlb(Path.Combine(dir, "glb set", "test.glb"));
+
+        // The GLB: main material, triangles, texture coordinates, node transform, extraction.
+        GltfDocument doc = GltfDocument.Open(Path.Combine(dir, "glb set", "test.glb"), out error);
+        Check(doc != null, "a GLB opens (" + error + ")");
+        GltfDocument.Primary primary = doc.FindPrimary(out error);
+        Check(primary != null && primary.BaseColor == 0 && primary.Triangles == 2 && primary.Normal == 1 && primary.Occlusion == 2 && primary.MetalRough == 2
+            && primary.MaterialName == "airframe", "the material that covers most triangles is chosen, with its maps");
+        ObjModel model = doc.BuildModel(primary, false, out error);
+        Check(model != null && model.TriangleCount == 2, "only the triangles of that material are used (got " + (model != null ? model.TriangleCount : -1) + ")");
+        if (model != null)
+        {
+            Check(model.A[0].x == 1 && model.A[0].y == 2 && model.A[0].z == 3 && model.B[0].x == 2 && model.C[0].y == 3, "the node's translation is applied");
+            Check(Math.Abs((model.UvA[0].y - model.UvC[0].y) - 1f) < 1e-5f && Math.Abs((model.UvB[0].x - model.UvA[0].x) - 1f) < 1e-5f, "v is turned over (glTF has it from the top)");
+        }
+
+        ObjModel mirrored = doc.BuildModel(primary, true, out error);
+        Check(mirrored != null && mirrored.A[0].x == -1 && mirrored.B[0].x == -model.C[0].x, "mirrored on X like the OBJ reader");
+
+        GltfDocument.ExtractedFiles files = doc.Extract(primary, Path.Combine(dir, "_cache", "glb set"), "test", TextureLibrary.RelativeOf, out error);
+        Check(files != null && files.BaseColor == "_cache/glb set/test_baseColor.png" && files.Normal == "_cache/glb set/test_normal.png"
+            && files.MetalRough == "_cache/glb set/test_occlusion_metallic_roughness.png" && files.Occlusion == files.MetalRough
+            && File.Exists(Path.Combine(dir, "_cache", "glb set", "test_baseColor.png")), "the images are written with names that say their role");
+
+        // The same model as .gltf with the buffer inside (base64).
+        string gltfPath = Path.Combine(dir, "glb set", "same.gltf");
+        File.WriteAllText(gltfPath, BuildJson("data:application/octet-stream;base64," + Convert.ToBase64String(BuildBinary())));
+        GltfDocument gltf = GltfDocument.Open(gltfPath, out error);
+        GltfDocument.Primary p2 = gltf != null ? gltf.FindPrimary(out error) : null;
+        ObjModel m2 = p2 != null ? gltf.BuildModel(p2, false, out error) : null;
+        Check(m2 != null && m2.TriangleCount == 2, "a .gltf with an embedded buffer reads the same");
+
+        // Compressed files are refused clearly.
+        File.WriteAllText(Path.Combine(dir, "glb set", "draco.gltf"), "{\"asset\":{\"version\":\"2.0\"},\"extensionsRequired\":[\"KHR_draco_mesh_compression\"]}");
+        Check(GltfDocument.Open(Path.Combine(dir, "glb set", "draco.gltf"), out error) == null && error.Contains("compression"), "Draco compression is refused with the reason");
+        File.Delete(Path.Combine(dir, "glb set", "draco.gltf"));
+        File.Delete(gltfPath);
+
+        // Sets: one folder per aircraft.
+        Directory.CreateDirectory(Path.Combine(dir, "b2"));
+        Directory.CreateDirectory(Path.Combine(dir, "fw 190"));
+        foreach (string f in new[] { "B2BaseColor.png", "B2Normal.png", "B2Metallic-B2Roughness@channels=B.png", "B2Metallic-B2Roughness@channels=G.png", "B-2.obj" })
+            File.WriteAllText(Path.Combine(dir, "b2", f), "x");
+        foreach (string f in new[] { "fw_190d_9_a.jpg", "fw_190d_9_n_n.jpg", "fw_190d_9_n_ao.jpg", "fw_190d_9_n_s.jpg", "fw_190d_9_a.obj" })
+            File.WriteAllText(Path.Combine(dir, "fw 190", f), "x");
+        Directory.CreateDirectory(Path.Combine(dir, "Crafts"));
+        File.WriteAllText(Path.Combine(dir, "Crafts", "x.png"), "x"); // not a set
+
+        Plugin.SelectedSet.Value = "";
+        Plugin.SelectedTexture.Value = "";
+        Plugin.SelectedModel.Value = "auto";
+        foreach (var entry in new[] { Plugin.SelectedNormal, Plugin.SelectedOcclusion, Plugin.SelectedSpecular, Plugin.SelectedMetalness, Plugin.SelectedRoughness, Plugin.SelectedHeight }) entry.Value = "auto";
+        TextureLibrary.Refresh();
+        Check(TextureLibrary.SetCount == 3 && TextureLibrary.CurrentSetName == "b2", "three sets (b2, fw 190, glb set); Crafts and _cache are not sets (got " + TextureLibrary.SetCount + ", " + TextureLibrary.CurrentSetName + ")");
+        Check(TextureLibrary.CurrentImage.Relative == "b2/B2BaseColor.png" && TextureLibrary.CurrentModelRelative == "b2/B-2.obj"
+            && TextureLibrary.Normal.CurrentRelative == "b2/B2Normal.png" && TextureLibrary.Metalness.CurrentName == "B2Metallic-B2Roughness@channels=B.png"
+            && TextureLibrary.Roughness.CurrentName == "B2Metallic-B2Roughness@channels=G.png", "set b2: model, image and maps found by themselves");
+
+        TextureLibrary.StepSet(1);
+        Check(TextureLibrary.CurrentSetName == "fw 190" && TextureLibrary.CurrentImage.Relative == "fw 190/fw_190d_9_a.jpg" && TextureLibrary.CurrentModelName == "fw_190d_9_a.obj"
+            && TextureLibrary.Normal.CurrentName == "fw_190d_9_n_n.jpg" && TextureLibrary.Occlusion.CurrentName == "fw_190d_9_n_ao.jpg"
+            && TextureLibrary.Specular.CurrentName == "fw_190d_9_n_s.jpg", "set fw 190: everything found by itself");
+
+        TextureLibrary.StepSet(1);
+        Check(TextureLibrary.CurrentSetName == "glb set" && TextureLibrary.CurrentModelName == "test.glb"
+            && TextureLibrary.CurrentImage.Relative == "_cache/glb set/test_baseColor.png" && TextureLibrary.Normal.CurrentRelative == "_cache/glb set/test_normal.png"
+            && TextureLibrary.Metalness.CurrentRelative == "_cache/glb set/test_occlusion_metallic_roughness.png" && TextureLibrary.Roughness.CurrentRelative == TextureLibrary.Metalness.CurrentRelative
+            && TextureLibrary.Occlusion.CurrentRelative == TextureLibrary.Metalness.CurrentRelative, "set with a GLB: the images come from its material (" + TextureLibrary.CurrentImage.Relative + ")");
+
+        // A saved craft names paths relative to the folder: the set is found from the model.
+        CraftAssignment a = new CraftAssignment();
+        a.Image = "fw 190/fw_190d_9_a.jpg"; a.Model = "fw 190/fw_190d_9_a.obj"; a.Normal = "fw 190/fw_190d_9_n_n.jpg";
+        string problem;
+        Check(TextureLibrary.Select(a, out problem) && TextureLibrary.CurrentSetName == "fw 190" && TextureLibrary.Normal.CurrentName == "fw_190d_9_n_n.jpg",
+            "a saved craft brings its set back (" + problem + ")");
+        a.Image = "_cache/glb set/test_baseColor.png"; a.Model = "glb set/test.glb"; a.Normal = ""; a.MetallicMap = "_cache/glb set/test_occlusion_metallic_roughness.png";
+        Check(TextureLibrary.Select(a, out problem) && TextureLibrary.CurrentSetName == "glb set" && TextureLibrary.CurrentImage.Relative == a.Image
+            && TextureLibrary.Metalness.CurrentRelative == a.MetallicMap, "and the images extracted from a GLB (" + problem + ")");
+        Check(TextureLibrary.PathFor("fw 190/fw_190d_9_a.jpg") != null && TextureLibrary.PathFor("nothing/x.png") == null, "PathFor reads relative paths");
     }
 
     // ------------------------------------------------------------------ the OBJ reader
