@@ -15,7 +15,7 @@ namespace SP2TextureMod.UI
     public class TexturePanelScript : PanelDialogScript
     {
         private const float RefreshInterval = 0.5f;
-        private const int DetailRows = 14;
+        private const int DetailRows = 16;
 
         private Widget content;
         private PanelBuilder builder;
@@ -115,7 +115,7 @@ namespace SP2TextureMod.UI
         private void BuildApply()
         {
             builder.Header("Apply");
-            builder.Text("Note", "Apply saves the texture for this craft (by its name). Opening the craft or flying it puts it on again. Remove takes it off and forgets it.");
+            builder.Text("Note", "Apply saves the texture for this craft (by its name). Opening the craft or flying it puts it on again. Remove takes it off and forgets it. Parts that move (swing wings, gear) must be in the model's pose when you press Apply; you can move them afterwards.");
             builder.Buttons(new List<KeyValuePair<string, Action>>
             {
                 new KeyValuePair<string, Action>("Apply to craft", AtlasApplier.ApplyCurrent),

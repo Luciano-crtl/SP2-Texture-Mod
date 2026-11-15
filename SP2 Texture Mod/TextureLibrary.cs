@@ -68,7 +68,7 @@ namespace SP2TextureMod
         private static readonly string[] AlbedoSuffixes =
             { "_a", "_d", "_diff", "_diffuse", "_albedo", "_basecolor", "_base_color", "_color", "_col" };
 
-        private const string ReadmeMarker = "Readme version 2";
+        private const string ReadmeMarker = "Readme version 3";
 
         // Every PNG/JPG of the folder: what the map slots choose among.
         private static readonly List<Entry> AllImages = new List<Entry>();
@@ -246,7 +246,11 @@ namespace SP2TextureMod
                     + "  only the average of the specular image is used, as a general glossiness of the whole craft.\r\n"
                     + "- When you apply a texture in the designer it is saved for the craft (by its name) in the Crafts\r\n"
                     + "  folder next to this file. Opening that craft in the designer or flying it puts the texture on\r\n"
-                    + "  again. Remove in the panel takes the texture off and forgets it. The craft file is never changed.\r\n");
+                    + "  again. Remove in the panel takes the texture off and forgets it. The craft file is never changed.\r\n"
+                    + "- The texture coordinates are saved with the craft too (a .uv file next to its .txt), tied to the meshes and not to\r\n"
+                    + "  where the parts are. So an aircraft with moving parts (a swing wing, folding gear) must be in the SAME POSE AS THE\r\n"
+                    + "  OBJ MODEL when you press Apply (an F-14 model has its wings forward: put the wings forward, apply, then sweep them\r\n"
+                    + "  back and save the craft). The panel's \"Model fit\" row says POOR when the model does not match the craft.\r\n");
             }
             catch (Exception ex)
             {

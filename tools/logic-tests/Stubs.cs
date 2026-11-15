@@ -8,11 +8,39 @@ namespace UnityEngine
         public Vector3(float x, float y, float z) { this.x = x; this.y = y; this.z = z; }
         public static Vector3 zero { get { return new Vector3(0, 0, 0); } }
         public float sqrMagnitude { get { return x * x + y * y + z * z; } }
+        public static Vector3 Min(Vector3 a, Vector3 b) { return new Vector3(Math.Min(a.x, b.x), Math.Min(a.y, b.y), Math.Min(a.z, b.z)); }
+        public static Vector3 Max(Vector3 a, Vector3 b) { return new Vector3(Math.Max(a.x, b.x), Math.Max(a.y, b.y), Math.Max(a.z, b.z)); }
         public static bool operator ==(Vector3 a, Vector3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
         public static bool operator !=(Vector3 a, Vector3 b) { return !(a == b); }
         public override bool Equals(object o) { return o is Vector3 v && this == v; }
         public override int GetHashCode() { return x.GetHashCode(); }
     }
+    public struct Vector2
+    {
+        public float x, y;
+        public Vector2(float x, float y) { this.x = x; this.y = y; }
+        public static Vector2 zero { get { return new Vector2(0, 0); } }
+        public static Vector2 operator +(Vector2 a, Vector2 b) { return new Vector2(a.x + b.x, a.y + b.y); }
+        public static Vector2 Min(Vector2 a, Vector2 b) { return new Vector2(Math.Min(a.x, b.x), Math.Min(a.y, b.y)); }
+        public static Vector2 Max(Vector2 a, Vector2 b) { return new Vector2(Math.Max(a.x, b.x), Math.Max(a.y, b.y)); }
+    }
+
+    public class Mesh
+    {
+        public System.Collections.Generic.List<Vector3> V = new System.Collections.Generic.List<Vector3>();
+        public System.Collections.Generic.List<Vector2> U = new System.Collections.Generic.List<Vector2>();
+        public int vertexCount { get { return V.Count; } }
+        public void GetVertices(System.Collections.Generic.List<Vector3> list) { list.Clear(); list.AddRange(V); }
+        public void SetUVs(int channel, Vector2[] uvs) { U = new System.Collections.Generic.List<Vector2>(uvs); }
+        public void GetUVs(int channel, System.Collections.Generic.List<Vector2> list) { list.Clear(); list.AddRange(U); }
+    }
+
+    public struct Bounds
+    {
+        public Vector3 min, max;
+        public void SetMinMax(Vector3 a, Vector3 b) { min = a; max = b; }
+    }
+
     public struct Vector4
     {
         public float x, y, z, w;
@@ -30,6 +58,7 @@ namespace UnityEngine
     public static class Mathf
     {
         public static int Clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+        public static float Floor(float v) { return (float)Math.Floor(v); }
     }
     public static class Application
     {

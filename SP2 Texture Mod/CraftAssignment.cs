@@ -74,6 +74,12 @@ namespace SP2TextureMod
             return System.IO.Path.Combine(FolderPath, SafeName(craftName) + ".txt");
         }
 
+        /// <summary>Path of the saved texture coordinates of a craft (see UvCache).</summary>
+        public static string UvFilePathFor(string craftName)
+        {
+            return System.IO.Path.Combine(FolderPath, SafeName(craftName) + ".uv");
+        }
+
         public static bool Exists(string craftName)
         {
             return !string.IsNullOrEmpty(craftName) && File.Exists(FilePathFor(craftName));
@@ -278,6 +284,12 @@ namespace SP2TextureMod
             string path = FilePathFor(craftName);
             try
             {
+                string uv = UvFilePathFor(craftName);
+                if (File.Exists(uv))
+                {
+                    File.Delete(uv);
+                }
+
                 if (File.Exists(path))
                 {
                     File.Delete(path);

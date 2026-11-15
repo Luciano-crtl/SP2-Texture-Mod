@@ -47,85 +47,21 @@ namespace SP2TextureMod
             int badLines = 0;
             int cornersWithoutUv = 0;
 
-            foreach (string line in File.ReadLines(path))
+            // Read as bytes and parsed by hand: splitting every line into strings took 23 s with a model of 380 thousand
+            // triangles in the game's Mono.
+            byte[] data;
+            try
             {
-                if (line.Length < 3)
-                {
-                    continue;
-                }
-
-                char c0 = line[0];
-                char c1 = line[1];
-
-                if (c0 == 'v' && c1 == ' ')
-                {
-                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
-                    float x, y, z;
-                    if (p.Length >= 4 && TryFloat(p[1], out x) && TryFloat(p[2], out y) && TryFloat(p[3], out z))
-                    {
-                        positions.Add(new Vector3(x, y, z));
-                    }
-                    else
-                    {
-                        badLines++;
-                    }
-                }
-                else if (c0 == 'v' && c1 == 't' && line[2] == ' ')
-                {
-                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
-                    float u, v;
-                    if (p.Length >= 3 && TryFloat(p[1], out u) && TryFloat(p[2], out v))
-                    {
-                        uvs.Add(new Vector2(u, v));
-                    }
-                    else
-                    {
-                        badLines++;
-                    }
-                }
-                else if (c0 == 'f' && c1 == ' ')
-                {
-                    string[] p = line.Split(Separators, StringSplitOptions.RemoveEmptyEntries);
-                    int count = p.Length - 1;
-                    if (count < 3)
-                    {
-                        badLines++;
-                        continue;
-                    }
-
-                    int[] vi = new int[count];
-                    int[] ti = new int[count];
-                    bool ok = true;
-                    for (int i = 0; i < count; i++)
-                    {
-                        if (!ParseCorner(p[i + 1], positions.Count, uvs.Count, out vi[i], out ti[i]))
-                        {
-                            ok = false;
-                            break;
-                        }
-                    }
-
-                    if (!ok)
-                    {
-                        badLines++;
-                        continue;
-                    }
-
-                    // Fan triangulation: (0, i, i + 1).
-                    for (int i = 1; i < count - 1; i++)
-                    {
-                        Vector2 uva = ti[0] >= 0 ? uvs[ti[0]] : Vector2.zero;
-                        Vector2 uvb = ti[i] >= 0 ? uvs[ti[i]] : Vector2.zero;
-                        Vector2 uvc = ti[i + 1] >= 0 ? uvs[ti[i + 1]] : Vector2.zero;
-                        if (ti[0] < 0) cornersWithoutUv++;
-                        if (ti[i] < 0) cornersWithoutUv++;
-                        if (ti[i + 1] < 0) cornersWithoutUv++;
-
-                        AddTriangle(ta, tb, tc, ua, ub, uc,
-                            positions[vi[0]], positions[vi[i]], positions[vi[i + 1]], uva, uvb, uvc, flipX);
-                    }
-                }
+                data = File.ReadAllBytes(path);
             }
+            catch (Exception ex)
+            {
+                error = "the file could not be read: " + ex.Message;
+                return null;
+            }
+
+            Parse(data, positions, uvs, ta, tb, tc, ua, ub, uc, flipX, ref badLines, ref cornersWithoutUv);
+            data = null;
 
             if (ta.Count == 0)
             {
@@ -205,6 +141,324 @@ namespace SP2TextureMod
             return model;
         }
 
+        // Lines "v x y z", "vt u v" and "f a b c ..." (corners "v", "v/vt", "v//vn" or "v/vt/vn", 1-based or negative);
+        // everything else (comments, vn, o, g, usemtl...) is skipped. Polygons are fanned into triangles.
+        private static void Parse(byte[] d, List<Vector3> positions, List<Vector2> uvs,
+            List<Vector3> ta, List<Vector3> tb, List<Vector3> tc, List<Vector2> ua, List<Vector2> ub, List<Vector2> uc,
+            bool flipX, ref int badLines, ref int cornersWithoutUv)
+        {
+            int n = d.Length;
+            int pos = 0;
+            int[] vi = new int[32];
+            int[] ti = new int[32];
+            while (pos < n)
+            {
+                int end = pos;
+                while (end < n && d[end] != (byte)'\n' && d[end] != (byte)'\r')
+                {
+                    end++;
+                }
+
+                int p = pos;
+                pos = end + 1;
+                while (p < end && (d[p] == (byte)' ' || d[p] == (byte)'\t'))
+                {
+                    p++;
+                }
+
+                if (end - p < 3)
+                {
+                    continue;
+                }
+
+                byte c0 = d[p];
+                byte c1 = d[p + 1];
+                if (c0 == (byte)'v' && c1 == (byte)' ')
+                {
+                    p += 2;
+                    float x, y, z;
+                    if (ReadFloat(d, ref p, end, out x) && ReadFloat(d, ref p, end, out y) && ReadFloat(d, ref p, end, out z))
+                    {
+                        positions.Add(new Vector3(x, y, z));
+                    }
+                    else
+                    {
+                        badLines++;
+                    }
+                }
+                else if (c0 == (byte)'v' && c1 == (byte)'t' && d[p + 2] == (byte)' ')
+                {
+                    p += 3;
+                    float u, v;
+                    if (ReadFloat(d, ref p, end, out u) && ReadFloat(d, ref p, end, out v))
+                    {
+                        uvs.Add(new Vector2(u, v));
+                    }
+                    else
+                    {
+                        badLines++;
+                    }
+                }
+                else if (c0 == (byte)'f' && c1 == (byte)' ')
+                {
+                    p += 2;
+                    int count = 0;
+                    bool ok = true;
+                    while (true)
+                    {
+                        while (p < end && (d[p] == (byte)' ' || d[p] == (byte)'\t'))
+                        {
+                            p++;
+                        }
+
+                        if (p >= end)
+                        {
+                            break;
+                        }
+
+                        if (count == vi.Length)
+                        {
+                            Array.Resize(ref vi, count * 2);
+                            Array.Resize(ref ti, count * 2);
+                        }
+
+                        if (!ReadCorner(d, ref p, end, positions.Count, uvs.Count, out vi[count], out ti[count]))
+                        {
+                            ok = false;
+                            break;
+                        }
+
+                        count++;
+                    }
+
+                    if (!ok || count < 3)
+                    {
+                        badLines++;
+                        continue;
+                    }
+
+                    // Fan triangulation: (0, i, i + 1).
+                    for (int i = 1; i < count - 1; i++)
+                    {
+                        Vector2 uva = ti[0] >= 0 ? uvs[ti[0]] : Vector2.zero;
+                        Vector2 uvb = ti[i] >= 0 ? uvs[ti[i]] : Vector2.zero;
+                        Vector2 uvc = ti[i + 1] >= 0 ? uvs[ti[i + 1]] : Vector2.zero;
+                        if (ti[0] < 0) cornersWithoutUv++;
+                        if (ti[i] < 0) cornersWithoutUv++;
+                        if (ti[i + 1] < 0) cornersWithoutUv++;
+
+                        AddTriangle(ta, tb, tc, ua, ub, uc,
+                            positions[vi[0]], positions[vi[i]], positions[vi[i + 1]], uva, uvb, uvc, flipX);
+                    }
+                }
+            }
+        }
+
+        private static readonly double[] Powers = BuildPowers();
+
+        private static double[] BuildPowers()
+        {
+            double[] table = new double[64];
+            for (int i = 0; i < table.Length; i++)
+            {
+                table[i] = Math.Pow(10.0, i);
+            }
+
+            return table;
+        }
+
+        // A decimal number ("1", "-0.25", ".5", "5.", "1e-3") followed by a space, a tab or the end of the line.
+        private static bool ReadFloat(byte[] d, ref int p, int end, out float value)
+        {
+            value = 0f;
+            while (p < end && (d[p] == (byte)' ' || d[p] == (byte)'\t'))
+            {
+                p++;
+            }
+
+            if (p >= end)
+            {
+                return false;
+            }
+
+            bool negative = false;
+            if (d[p] == (byte)'-')
+            {
+                negative = true;
+                p++;
+            }
+            else if (d[p] == (byte)'+')
+            {
+                p++;
+            }
+
+            const long Limit = 100000000000000000L; // more digits than a float holds are dropped
+            long mantissa = 0;
+            int exponent = 0;
+            bool any = false;
+            while (p < end && d[p] >= (byte)'0' && d[p] <= (byte)'9')
+            {
+                any = true;
+                if (mantissa < Limit)
+                {
+                    mantissa = mantissa * 10 + (d[p] - (byte)'0');
+                }
+                else
+                {
+                    exponent++;
+                }
+
+                p++;
+            }
+
+            if (p < end && d[p] == (byte)'.')
+            {
+                p++;
+                while (p < end && d[p] >= (byte)'0' && d[p] <= (byte)'9')
+                {
+                    any = true;
+                    if (mantissa < Limit)
+                    {
+                        mantissa = mantissa * 10 + (d[p] - (byte)'0');
+                        exponent--;
+                    }
+
+                    p++;
+                }
+            }
+
+            if (!any)
+            {
+                return false;
+            }
+
+            if (p < end && (d[p] == (byte)'e' || d[p] == (byte)'E'))
+            {
+                p++;
+                bool negativeExponent = false;
+                if (p < end && (d[p] == (byte)'-' || d[p] == (byte)'+'))
+                {
+                    negativeExponent = d[p] == (byte)'-';
+                    p++;
+                }
+
+                int e = 0;
+                bool digits = false;
+                while (p < end && d[p] >= (byte)'0' && d[p] <= (byte)'9')
+                {
+                    digits = true;
+                    if (e < 1000)
+                    {
+                        e = e * 10 + (d[p] - (byte)'0');
+                    }
+
+                    p++;
+                }
+
+                if (!digits)
+                {
+                    return false;
+                }
+
+                exponent += negativeExponent ? -e : e;
+            }
+
+            if (p < end && d[p] != (byte)' ' && d[p] != (byte)'\t')
+            {
+                return false;
+            }
+
+            double result = mantissa;
+            if (exponent > 0)
+            {
+                result *= exponent < Powers.Length ? Powers[exponent] : Math.Pow(10.0, exponent);
+            }
+            else if (exponent < 0)
+            {
+                result /= -exponent < Powers.Length ? Powers[-exponent] : Math.Pow(10.0, -exponent);
+            }
+
+            value = (float)(negative ? -result : result);
+            return true;
+        }
+
+        // A face corner: "v", "v/vt", "v//vn" or "v/vt/vn". Indexes are 1-based, negative ones count from the end.
+        private static bool ReadCorner(byte[] d, ref int p, int end, int vertexCount, int uvCount, out int vertexIndex, out int uvIndex)
+        {
+            vertexIndex = -1;
+            uvIndex = -1;
+
+            int v;
+            if (!ReadInt(d, ref p, end, out v))
+            {
+                return false;
+            }
+
+            vertexIndex = v > 0 ? v - 1 : vertexCount + v;
+            if (vertexIndex < 0 || vertexIndex >= vertexCount)
+            {
+                return false;
+            }
+
+            if (p < end && d[p] == (byte)'/')
+            {
+                p++;
+                int t;
+                if (p < end && d[p] != (byte)'/' && d[p] != (byte)' ' && d[p] != (byte)'\t' && ReadInt(d, ref p, end, out t))
+                {
+                    int index = t > 0 ? t - 1 : uvCount + t;
+                    if (index >= 0 && index < uvCount)
+                    {
+                        uvIndex = index;
+                    }
+                }
+            }
+
+            // The rest of the token (the normal index) is of no use here.
+            while (p < end && d[p] != (byte)' ' && d[p] != (byte)'\t')
+            {
+                p++;
+            }
+
+            return true;
+        }
+
+        private static bool ReadInt(byte[] d, ref int p, int end, out int value)
+        {
+            value = 0;
+            bool negative = false;
+            if (p < end && d[p] == (byte)'-')
+            {
+                negative = true;
+                p++;
+            }
+            else if (p < end && d[p] == (byte)'+')
+            {
+                p++;
+            }
+
+            bool any = false;
+            long number = 0;
+            while (p < end && d[p] >= (byte)'0' && d[p] <= (byte)'9')
+            {
+                any = true;
+                if (number < 1000000000L)
+                {
+                    number = number * 10 + (d[p] - (byte)'0');
+                }
+
+                p++;
+            }
+
+            if (!any)
+            {
+                return false;
+            }
+
+            value = (int)(negative ? -number : number);
+            return true;
+        }
+
         // The whole-number shift of u and v that puts the median of each inside [0, 1).
         private static void WholeShift(ObjModel model, out float shiftU, out float shiftV)
         {
@@ -250,50 +504,6 @@ namespace SP2TextureMod
         {
             min = Vector3.Min(min, p);
             max = Vector3.Max(max, p);
-        }
-
-        private static bool TryFloat(string text, out float value)
-        {
-            return float.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
-        }
-
-        // A face corner is "v", "v/vt", "v//vn" or "v/vt/vn"; indexes are 1-based, negative ones count from the end.
-        private static bool ParseCorner(string token, int vertexCount, int uvCount, out int vertexIndex, out int uvIndex)
-        {
-            vertexIndex = -1;
-            uvIndex = -1;
-
-            int slash = token.IndexOf('/');
-            string vertexText = slash < 0 ? token : token.Substring(0, slash);
-
-            int v;
-            if (!int.TryParse(vertexText, NumberStyles.Integer, CultureInfo.InvariantCulture, out v))
-            {
-                return false;
-            }
-
-            vertexIndex = v > 0 ? v - 1 : vertexCount + v;
-            if (vertexIndex < 0 || vertexIndex >= vertexCount)
-            {
-                return false;
-            }
-
-            if (slash >= 0)
-            {
-                int slash2 = token.IndexOf('/', slash + 1);
-                string uvText = slash2 < 0 ? token.Substring(slash + 1) : token.Substring(slash + 1, slash2 - slash - 1);
-                int t;
-                if (uvText.Length > 0 && int.TryParse(uvText, NumberStyles.Integer, CultureInfo.InvariantCulture, out t))
-                {
-                    int index = t > 0 ? t - 1 : uvCount + t;
-                    if (index >= 0 && index < uvCount)
-                    {
-                        uvIndex = index;
-                    }
-                }
-            }
-
-            return true;
         }
     }
 }

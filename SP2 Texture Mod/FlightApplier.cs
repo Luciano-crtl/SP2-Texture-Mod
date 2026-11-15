@@ -31,8 +31,13 @@ namespace SP2TextureMod
             public bool Active;          // false: nothing is put on this aircraft
             public AtlasLook Look = new AtlasLook();
             public Material Material;
+            public string ModelPath;      // the OBJ (read only if some renderer has no saved coordinates)
             public ObjModel Model;
             public TriangleBvh Bvh;
+            public bool ModelFailed;
+            public UvCache Cache;
+            public int FromCache;
+            public int Computed;
             public ModelAlignment Alignment;
             public UvTransfer.Options Options;
             public readonly UvTransfer.Stats Stats = new UvTransfer.Stats();
@@ -232,7 +237,6 @@ namespace SP2TextureMod
                     return session;
                 }
 
-                CheckFrame(session);
                 session.Milliseconds = watch.ElapsedMilliseconds;
                 session.Active = true;
                 Plugin.Log.LogInfo(Tag + "the craft '" + name + "' has a saved texture: image '" + assignment.Image + "', "
@@ -296,18 +300,10 @@ namespace SP2TextureMod
                     return false;
                 }
 
-                ObjModel model;
-                TriangleBvh bvh;
-                string error;
-                if (!ModelCache.Get(modelPath, a.FlipModelX, out model, out bvh, out error))
-                {
-                    problem = "the model '" + a.Model + "' could not be read: " + error;
-                    return false;
-                }
-
-                bvh.SetNormalsInverted(a.NormalsInverted);
-                s.Model = model;
-                s.Bvh = bvh;
+                // The OBJ is only read if some renderer has no saved coordinates (EnsureModel): with the coordinates saved when
+                // the texture was applied, flight needs neither the OBJ (its read took 23 s for 380 thousand triangles) nor a search.
+                s.ModelPath = modelPath;
+                s.Cache = UvCache.Load(s.CraftName, UvCache.MakeSignature(modelPath, a));
                 s.Alignment = ModelAlignment.FromMatrix(a.ObjToCraft);
                 s.Options = new UvTransfer.Options
                 {
@@ -390,6 +386,37 @@ namespace SP2TextureMod
             if (look.Occlusion != null) text += (text.Length > 0 ? ", " : "") + "occlusion";
             if (look.Height != null) text += (text.Length > 0 ? ", " : "") + "height";
             return text.Length > 0 ? text : "none";
+        }
+
+        // Reads the OBJ the first time a renderer has no saved coordinates, and checks where the craft is (the alignment is
+        // in the craft's own space, which is only needed when coordinates are worked out).
+        private static bool EnsureModel(Session s)
+        {
+            if (s.Model != null)
+            {
+                return true;
+            }
+
+            if (s.ModelFailed || s.ModelPath == null)
+            {
+                return false;
+            }
+
+            ObjModel model;
+            TriangleBvh bvh;
+            string error;
+            if (!ModelCache.Get(s.ModelPath, s.Assignment.FlipModelX, out model, out bvh, out error))
+            {
+                s.ModelFailed = true;
+                Plugin.Log.LogWarning(Tag + "a renderer has no saved texture coordinates and the model could not be read: " + error);
+                return false;
+            }
+
+            bvh.SetNormalsInverted(s.Assignment.NormalsInverted);
+            s.Model = model;
+            s.Bvh = bvh;
+            CheckFrame(s);
+            return true;
         }
 
         // ------------------------------------------------------------------ the craft's own space in flight
@@ -548,15 +575,28 @@ namespace SP2TextureMod
             try
             {
                 Mesh mesh = map.Mesh;
-                Matrix4x4 toCraft = RendererToCraft(part, map.Renderer);
                 if (s.Alignment != null)
                 {
-                    UvTransfer.Write(mesh, toCraft, s.Model, s.Bvh, s.Alignment, s.Options, s.Stats);
-                    s.Stats.Points.Clear(); // only the designer draws the debug map
+                    int ordinal = part.PartMaterialScript.RendererMaps.IndexOf(map);
+                    if (s.Cache != null && s.Cache.Apply(part.Part.Id, ordinal, mesh))
+                    {
+                        s.FromCache++;
+                    }
+                    else
+                    {
+                        if (!EnsureModel(s))
+                        {
+                            return false;
+                        }
+
+                        UvTransfer.Write(mesh, RendererToCraft(part, map.Renderer), s.Model, s.Bvh, s.Alignment, s.Options, s.Stats);
+                        s.Stats.Points.Clear(); // only the designer draws the debug map
+                        s.Computed++;
+                    }
                 }
                 else
                 {
-                    UvProjection.BoxProject(mesh, toCraft, s.Assignment.TilesPerMeter);
+                    UvProjection.BoxProject(mesh, RendererToCraft(part, map.Renderer), s.Assignment.TilesPerMeter);
                 }
 
                 if (!UvProjection.SetMaterialIndex(mesh, AtlasMaterial.AlbedoShaderIndex(s.Theme)))
@@ -611,7 +651,8 @@ namespace SP2TextureMod
             Plugin.Log.LogInfo(Tag + "texture of the craft '" + s.CraftName + "' put on " + s.Renderers + " renderer(s) of " + s.Parts
                 + " part(s) in " + s.Milliseconds + " ms (including reading its files) | not textured: " + s.Failed + " failed, skipped "
                 + (skipped.Length > 0 ? skipped.ToString() : "none")
-                + (s.Alignment != null ? " | match: " + s.Stats.MatchSummary() + " | texture coords " + s.Stats.UvRangeSummary() : ""));
+                + (s.Alignment != null ? " | texture coordinates: " + s.FromCache + " renderer(s) from the saved ones, " + s.Computed
+                    + " worked out" + (s.Computed > 0 ? " (match: " + s.Stats.MatchSummary() + ", " + s.Stats.UvRangeSummary() + ")" : "") : ""));
 
             Texture bound = s.Material != null ? s.Material.GetTexture(Shader.PropertyToID("_BaseMap")) : null;
             Plugin.Log.LogInfo(Tag + "verify: material " + (s.Material != null ? "'" + s.Material.name + "' shader '" + s.Material.shader.name + "'" : "GONE")

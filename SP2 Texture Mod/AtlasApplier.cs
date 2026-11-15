@@ -67,6 +67,14 @@ namespace SP2TextureMod
         private static ObjModel _model;
         private static TriangleBvh _bvh;
         private static ModelAlignment _alignment;
+        private static string _modelPath;       // the OBJ in use (null: tiled); the model itself may not be read yet
+        private static bool _normalsInverted;   // how the model's faces wind (kept apart: the BVH may not exist yet)
+        private static UvCache _uvCache;        // the coordinates of this craft's renderers, by part (see UvCache)
+        private static bool _uvCacheDirty;
+        private static float _uvDirtySince;
+        private static AircraftScript _cacheAircraft;
+        private static string _fitQuality = "";
+        private static int _cachedRenderers;
         private static readonly UvTransfer.Stats Stats = new UvTransfer.Stats();
         private static int _verifyFrame = -1;
 
@@ -139,6 +147,12 @@ namespace SP2TextureMod
             get { return Parts.Count > 0; }
         }
 
+        // The texture coordinates come from a model: aligned, with its options (the OBJ itself may still be unread).
+        private static bool TransferActive
+        {
+            get { return _alignment != null && _options != null && _modelPath != null; }
+        }
+
         // ------------------------------------------------------------------ entry points
 
         /// <summary>Called every frame by the plugin; puts a craft's saved texture on when it is opened, and runs the delayed self-check after applying.</summary>
@@ -146,6 +160,7 @@ namespace SP2TextureMod
         {
             try
             {
+                SaveUvCacheIfDue();
                 AutoTick();
             }
             catch (Exception ex)
@@ -326,10 +341,10 @@ namespace SP2TextureMod
                 return;
             }
 
-            bool transfer = _alignment != null && _model != null && _bvh != null && _options != null;
+            bool transfer = TransferActive;
             CraftAssignment a = new CraftAssignment();
             a.Image = image.FileName;
-            a.Model = transfer ? (TextureLibrary.CurrentModelName ?? "") : "";
+            a.Model = transfer ? System.IO.Path.GetFileName(_modelPath) : "";
             a.Normal = TextureLibrary.Normal.CurrentName ?? "";
             a.Occlusion = TextureLibrary.Occlusion.CurrentName ?? "";
             a.Height = TextureLibrary.Height.CurrentName ?? "";
@@ -341,7 +356,7 @@ namespace SP2TextureMod
             {
                 a.HasAlignment = true;
                 a.ObjToCraft = _alignment.ObjToCraft;
-                a.NormalsInverted = _bvh.NormalsInverted;
+                a.NormalsInverted = _normalsInverted;
                 a.FrontFaces = _frontFaces;
                 a.Project = _options.Project;
                 a.RayStart = _options.RayStartMeters;
@@ -379,6 +394,22 @@ namespace SP2TextureMod
                 _savedName = name;
                 StatusSet("Saved for flight", "yes, for the craft '" + name + "'");
                 Plugin.Log.LogInfo(Tag + "texture saved for the craft '" + name + "': " + CraftAssignment.FilePathFor(name));
+                SaveUvCache(name);
+                if (!transfer)
+                {
+                    try
+                    {
+                        string uv = CraftAssignment.UvFilePathFor(name);
+                        if (System.IO.File.Exists(uv))
+                        {
+                            System.IO.File.Delete(uv); // coordinates of an earlier model are of no use any more
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Plugin.Log.LogWarning(Tag + "could not delete the old saved coordinates: " + ex.Message);
+                    }
+                }
             }
             else
             {
@@ -386,9 +417,41 @@ namespace SP2TextureMod
             }
         }
 
+        // Writes the coordinates cache of the craft when something new is in it.
+        private static void SaveUvCache(string craftName)
+        {
+            if (_uvCache != null && _uvCacheDirty && TransferActive && _uvCache.Count > 0)
+            {
+                if (_uvCache.Save(craftName))
+                {
+                    _uvCacheDirty = false;
+                }
+            }
+        }
+
+        // Parts rebuilt or added after the apply add entries one by one: they are written a few seconds after the last one.
+        private static void SaveUvCacheIfDue()
+        {
+            if (_uvCacheDirty && _savedName != null && Time.unscaledTime > _uvDirtySince + 3f && Parts.Count > 0)
+            {
+                SaveUvCache(_savedName);
+            }
+        }
+
+        private static void MarkUvCacheDirty()
+        {
+            if (!_uvCacheDirty)
+            {
+                _uvDirtySince = Time.unscaledTime;
+            }
+
+            _uvCacheDirty = true;
+        }
+
         /// <summary>Applies the selected image (and model) to the aircraft open in the designer; applies again if already applied.</summary>
         public static void ApplyCurrent()
         {
+            _uvCache = null; // pressing Apply works the coordinates out again, whatever was saved
             string context;
             AircraftScript aircraft = DiagnosticDump.FindAircraft(out context);
             if (aircraft == null)
@@ -418,6 +481,8 @@ namespace SP2TextureMod
             if (forgotten)
             {
                 _savedName = null;
+                _uvCache = null;
+                _uvCacheDirty = false;
                 Plugin.Log.LogInfo(Tag + "the texture saved for the craft '" + name + "' was forgotten");
             }
 
@@ -441,6 +506,7 @@ namespace SP2TextureMod
             _fitCandidates = null;
             _fitChoice = 0;
             _pendingOrientation = 0;
+            _uvCache = null; // a new alignment means new coordinates
         }
 
         /// <summary>Tries the next best orientation of the model (when the best one has the model upside-down, for instance).</summary>
@@ -562,11 +628,23 @@ namespace SP2TextureMod
             LoadMaps();
             BuildLook();
 
+            if (_cacheAircraft != aircraft)
+            {
+                _cacheAircraft = aircraft;
+                _uvCache = null; // the coordinates kept are those of another craft
+                _uvCacheDirty = false;
+            }
+
+            // With the saved alignment and the coordinates saved with it (a craft whose texture is put on again) the
+            // OBJ is not even read; it is read later only for a renderer that has no saved coordinates.
             bool transfer = false;
+            bool deferred = false;
             string modelPath = TextureLibrary.CurrentModelPath;
             if (modelPath != null)
             {
-                transfer = PrepareModel(modelPath);
+                deferred = TryUseSavedUvs(aircraft, modelPath);
+                transfer = deferred || PrepareModel(modelPath);
+                _modelPath = transfer ? modelPath : null;
             }
 
             // Always repeat: tiling needs it, and the model's texture coordinates may lie a little outside [0, 1].
@@ -578,6 +656,8 @@ namespace SP2TextureMod
                 _bvh = null;
                 _alignment = null;
                 _options = null;
+                _modelPath = null;
+                _uvCache = null;
             }
 
             // 1. Which renderers can be textured.
@@ -620,13 +700,33 @@ namespace SP2TextureMod
 
             // 2. Align the model to the craft.
             string fit = "";
-            if (transfer)
+            _fitQuality = "";
+            if (transfer && !deferred)
             {
                 transfer = FitModel(aircraft, candidates, out fit);
+                if (!transfer)
+                {
+                    _modelPath = null;
+                    _uvCache = null;
+                }
+            }
+
+            // The coordinates of an earlier apply stay valid while the alignment and its options are the same
+            // (changing the image or a map does not need them again).
+            if (transfer)
+            {
+                string signature = UvCache.MakeSignature(_modelPath, Plugin.FlipModelX.Value, _alignment.ObjToCraft, _normalsInverted,
+                    _frontFaces, _options.Project, _options.RayStartMeters, _options.FacingWeightSquareMeters, _options.MaxDistanceMeters);
+                if (_uvCache == null || _uvCache.Signature != signature)
+                {
+                    _uvCache = new UvCache(signature);
+                    MarkUvCacheDirty();
+                }
             }
 
             // 3. Write UVs, styles and materials.
             Stats.Reset();
+            _cachedRenderers = 0;
             int parts = 0;
             int renderers = 0;
             foreach (Candidate candidate in candidates)
@@ -671,14 +771,14 @@ namespace SP2TextureMod
             }
 
             string mode = transfer
-                ? "model UV transfer (" + _model.Name + ")"
+                ? "model UV transfer (" + System.IO.Path.GetFileName(_modelPath) + ")"
                 : "tiled, " + Plugin.TilesPerMeter.Value.ToString("0.##", CultureInfo.InvariantCulture) + " per meter";
 
             Plugin.Log.LogInfo(Tag + "applied '" + _textureName() + "' to " + renderers + " renderer(s) of " + parts + " part(s) in "
                 + watch.ElapsedMilliseconds + " ms | mode: " + mode
                 + " | skipped " + skipped + (skippedText.Length > 0 ? " (" + skippedText + ")" : ""));
             string debugNote = "";
-            if (transfer)
+            if (transfer && Stats.Vertices > 0)
             {
                 Plugin.Log.LogInfo(Tag + "match quality: " + Stats.Describe(Plugin.MaxMatchDistance.Value));
                 try
@@ -700,14 +800,26 @@ namespace SP2TextureMod
             StatusAdd("Maps", MapsSummary());
             if (transfer)
             {
-                StatusAdd("Model", _model.Name);
+                StatusAdd("Model", System.IO.Path.GetFileName(_modelPath));
                 StatusAdd("Orientation", OrientationText);
-                StatusAdd("Model faces", _facingShort);
-                StatusAdd("Match", Stats.MatchSummary());
-                StatusAdd("Faces up", Stats.KindSummary(0));
-                StatusAdd("Faces down", Stats.KindSummary(1));
-                StatusAdd("Sideways", Stats.KindSummary(2));
-                StatusAdd("Texture coords", Stats.UvRangeSummary());
+                if (_fitQuality.Length > 0)
+                {
+                    StatusAdd("Model fit", _fitQuality);
+                }
+
+                if (Stats.Vertices == 0)
+                {
+                    StatusAdd("Match", "texture coordinates taken from the saved ones (" + _cachedRenderers + " renderers)");
+                }
+                else
+                {
+                    StatusAdd("Model faces", _facingShort);
+                    StatusAdd("Match", Stats.MatchSummary() + (_cachedRenderers > 0 ? "; " + _cachedRenderers + " renderers from the saved ones" : ""));
+                    StatusAdd("Faces up", Stats.KindSummary(0));
+                    StatusAdd("Faces down", Stats.KindSummary(1));
+                    StatusAdd("Sideways", Stats.KindSummary(2));
+                    StatusAdd("Texture coords", Stats.UvRangeSummary());
+                }
                 if (debugNote.Length > 0)
                 {
                     StatusAdd("Debug map", UvDebugMap.FileName);
@@ -749,6 +861,70 @@ namespace SP2TextureMod
             }
 
             _texture = texture;
+            return true;
+        }
+
+        // A craft that has a saved texture, a saved alignment and saved coordinates made with them: the alignment is
+        // taken as it is and the OBJ is left unread (EnsureModel reads it if some renderer needs it).
+        private static bool TryUseSavedUvs(AircraftScript aircraft, string modelPath)
+        {
+            if (_stored == null || !_stored.HasAlignment)
+            {
+                return false;
+            }
+
+            string name = DiagnosticDump.CraftNameOf(aircraft);
+            if (name.Length == 0)
+            {
+                return false;
+            }
+
+            UvCache cache = UvCache.Load(name, UvCache.MakeSignature(modelPath, _stored));
+            if (cache == null)
+            {
+                return false;
+            }
+
+            _uvCache = cache;
+            _uvCacheDirty = false;
+            _model = null;
+            _bvh = null;
+            ApplyStoredState(_stored);
+            if (_stored.HasBounds)
+            {
+                _fitBounds = new Bounds(_stored.BoundsCenter, _stored.BoundsSize);
+                _hasFitBounds = true;
+            }
+
+            Plugin.Log.LogInfo(Tag + "the OBJ is not read: the craft has saved texture coordinates for " + cache.Count + " renderer(s)");
+            return true;
+        }
+
+        // The model is read (if it was not) for a renderer whose coordinates have to be worked out.
+        private static bool EnsureModel()
+        {
+            if (_model != null && _bvh != null)
+            {
+                return true;
+            }
+
+            if (_modelPath == null)
+            {
+                return false;
+            }
+
+            ObjModel model;
+            TriangleBvh bvh;
+            string error;
+            if (!ModelCache.Get(_modelPath, Plugin.FlipModelX.Value, out model, out bvh, out error))
+            {
+                Plugin.Log.LogWarning(Tag + "a renderer needs the model but it could not be read: " + error);
+                return false;
+            }
+
+            _model = model;
+            _bvh = bvh;
+            _bvh.SetNormalsInverted(_normalsInverted);
             return true;
         }
 
@@ -877,6 +1053,8 @@ namespace SP2TextureMod
                     _facingShort = "agree " + Percent(agreement);
                 }
 
+                _normalsInverted = _bvh.NormalsInverted;
+
                 // With consistent faces only the faces that look at the ray count; otherwise the first surface hit does.
                 _frontFaces = agreement >= 0.75f;
 
@@ -895,10 +1073,18 @@ namespace SP2TextureMod
                     + ") | alignment " + (reused ? "kept from before" : "found in " + watch.ElapsedMilliseconds + " ms")
                     + " | using " + summary + " | method: " + (_options.Project ? "project along normals" : "nearest surface")
                     + ", front faces only: " + _frontFaces);
-                if (auto.MeanDistance > 0.08f * Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z)))
+                float craftMax = Mathf.Max(bounds.size.x, Mathf.Max(bounds.size.y, bounds.size.z));
+                float percent = 100f * auto.MeanDistance / Mathf.Max(craftMax, 1e-4f);
+                if (auto.MeanDistance > 0.08f * craftMax)
                 {
-                    Plugin.Log.LogWarning(Tag + "the model does not fit the craft well (mean distance is large). "
-                        + "Is it the same aircraft? Try the next orientation, the Adjust settings or FlipModelX = false.");
+                    _fitQuality = "POOR, " + F(percent) + "% off: is the craft in the model's pose (swept wings, gear...)?";
+                    Plugin.Log.LogWarning(Tag + "the model does not fit the craft well (mean distance " + F(auto.MeanDistance) + " m, " + F(percent)
+                        + "% of its size). Is it the same aircraft in the same pose (wing sweep, flaps, gear)? Put the craft in the model's pose, "
+                        + "apply, then pose it again: the coordinates stay with the meshes. Or try the next orientation, the Adjust settings or FlipModelX = false.");
+                }
+                else
+                {
+                    _fitQuality = "good, " + F(percent) + "% off";
                 }
 
                 return true;
@@ -913,17 +1099,17 @@ namespace SP2TextureMod
             }
         }
 
-        // The model-to-craft matrix saved with the craft is the final alignment (the search and the manual
-        // adjustment together): it is used as it is. Whether the craft still looks like it did is only reported.
-        private static void UseStoredAlignment(CraftAssignment stored, Bounds bounds, out string summary)
+        // The alignment saved with the craft, as state (the BVH, if there is one, is told separately).
+        private static void ApplyStoredState(CraftAssignment stored)
         {
             _alignment = ModelAlignment.FromMatrix(stored.ObjToCraft);
-            _bvh.SetNormalsInverted(stored.NormalsInverted);
+            _normalsInverted = stored.NormalsInverted;
             _frontFaces = stored.FrontFaces;
             _alignmentFromSaved = true;
             _fitCandidates = null; // a change made later in the panel searches again
             _fitChoice = 0;
             _facingShort = "saved" + (stored.NormalsInverted ? " (turned around)" : "");
+            _fitQuality = "saved with the craft";
 
             _options = new UvTransfer.Options
             {
@@ -934,6 +1120,14 @@ namespace SP2TextureMod
                 FacingWeightSquareMeters = stored.FacingWeight,
                 FarLimitMeters = stored.MaxDistance
             };
+        }
+
+        // The model-to-craft matrix saved with the craft is the final alignment (the search and the manual
+        // adjustment together): it is used as it is. Whether the craft still looks like it did is only reported.
+        private static void UseStoredAlignment(CraftAssignment stored, Bounds bounds, out string summary)
+        {
+            ApplyStoredState(stored);
+            _bvh.SetNormalsInverted(stored.NormalsInverted);
 
             summary = "alignment taken from the craft's saved file";
             Plugin.Log.LogInfo(Tag + "craft size (" + F(bounds.size.x) + ", " + F(bounds.size.y) + ", " + F(bounds.size.z)
@@ -1058,9 +1252,28 @@ namespace SP2TextureMod
                 }
 
                 Mesh mesh = map.Mesh;
-                if (_alignment != null && _model != null && _bvh != null && _options != null)
+                if (TransferActive)
                 {
-                    UvTransfer.Write(mesh, map.Renderer.transform, aircraft.transform, _model, _bvh, _alignment, _options, Stats);
+                    int partId = state.Part.Part.Id;
+                    int ordinal = state.Materials.RendererMaps.IndexOf(map);
+                    if (_uvCache != null && _uvCache.Apply(partId, ordinal, mesh))
+                    {
+                        _cachedRenderers++;
+                    }
+                    else
+                    {
+                        if (!EnsureModel())
+                        {
+                            return false;
+                        }
+
+                        UvTransfer.Write(mesh, map.Renderer.transform, aircraft.transform, _model, _bvh, _alignment, _options, Stats);
+                        if (_uvCache != null)
+                        {
+                            _uvCache.Remember(partId, ordinal, mesh);
+                            MarkUvCacheDirty();
+                        }
+                    }
                 }
                 else
                 {
@@ -1422,6 +1635,7 @@ namespace SP2TextureMod
             _bvh = null;
             _alignment = null;
             _options = null;
+            _modelPath = null;
             _activeAircraft = null;
             _verifyFrame = -1;
             SetStatus("Removed (" + renderers + " renderers restored).");
